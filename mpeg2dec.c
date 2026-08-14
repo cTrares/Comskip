@@ -36,6 +36,7 @@ double test_pts = 0.0;
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
+#include <libavcodec/codec_desc.h>
 
 //#define restrict
 //#include <libavcodec/ac3dec.h>
@@ -43,6 +44,16 @@ double test_pts = 0.0;
 #include <libavutil/pixdesc.h>
 #include <libavutil/samplefmt.h>
 #include <libswscale/swscale.h>
+
+static int get_ticks_per_frame(const AVCodecContext *codec_context)
+{
+    if (codec_context->codec_id == AV_CODEC_ID_MPEG1VIDEO)
+        return 1;
+
+    const AVCodecDescriptor *descriptor = avcodec_descriptor_get(codec_context->codec_id);
+
+    return descriptor && (descriptor->props & AV_CODEC_PROP_FIELDS) ? 2 : 1;
+}
 
 #ifdef HARDWARE_DECODE
 #include <fftools/ffmpeg.h>
@@ -1236,6 +1247,7 @@ int video_packet_process(VideoState *is,AVPacket *packet)
     double frame_delay;
     int len1, frameFinished = 0;
     int repeat;
+    const int ticks_per_frame = get_ticks_per_frame(is->dec_ctx);
     double pts;
 //    double dts;
     double real_pts;
@@ -1308,7 +1320,7 @@ static int    prev_strange_framenum = 0;
         }
         else
         {
-           frame_delay = av_q2d(is->dec_ctx->time_base) * is->dec_ctx->ticks_per_frame ;
+           frame_delay = av_q2d(is->dec_ctx->time_base) * ticks_per_frame;
         }
 
 //        frame_delay = av_q2d(is->dec_ctx->time_base) * is->dec_ctx->ticks_per_frame ;
@@ -1419,17 +1431,17 @@ static int    prev_strange_framenum = 0;
 //#define SHOW_VIDEO_TIMING
 #ifdef SHOW_VIDEO_TIMING
         if (framenum==0)
-            Debug(1,"Video timing ---------------------------------------------------\n", frame_delay/is->dec_ctx->ticks_per_frame, is->dec_ctx->ticks_per_frame, repeat, real_pts,calculated_delay);
+            Debug(1,"Video timing ---------------------------------------------------\n", frame_delay/ticks_per_frame, ticks_per_frame, repeat, real_pts,calculated_delay);
         else if (framenum<20)
-            Debug(1,"Video timing fr=%6.5f, tick=%d, repeat=%d, pts=%6.3f, step=%6.5f\n", frame_delay/is->dec_ctx->ticks_per_frame, is->dec_ctx->ticks_per_frame, repeat, real_pts,calculated_delay);
+            Debug(1,"Video timing fr=%6.5f, tick=%d, repeat=%d, pts=%6.3f, step=%6.5f\n", frame_delay/ticks_per_frame, ticks_per_frame, repeat, real_pts,calculated_delay);
 #endif // SHOW_VIDEO_TIMING
 
 
         pts_offset *= 0.9;
         if (!reviewing && timeline_repair) {
             if (framenum > 1 && fabs(calculated_delay - pts_offset - frame_delay) < 1.0) { // Allow max 0.5 second timeline jitter to be compensated
-                if (!ISSAME(3*frame_delay/ is->dec_ctx->ticks_per_frame, calculated_delay))
-                    if (!ISSAME(1*frame_delay/ is->dec_ctx->ticks_per_frame, calculated_delay))
+                if (!ISSAME(3*frame_delay/ ticks_per_frame, calculated_delay))
+                    if (!ISSAME(1*frame_delay/ ticks_per_frame, calculated_delay))
                         pts_offset = pts_offset + frame_delay - calculated_delay;
             }
         }
@@ -1444,9 +1456,9 @@ static int    prev_strange_framenum = 0;
 
         if (!reviewing
             && framenum > 1 && fabs(calculated_delay - frame_delay) > 0.01
-            && !ISSAME(3*frame_delay/ is->dec_ctx->ticks_per_frame, calculated_delay)
-            && !ISSAME(2*frame_delay/ is->dec_ctx->ticks_per_frame, calculated_delay)
-            && !ISSAME(1*frame_delay/ is->dec_ctx->ticks_per_frame, calculated_delay)
+            && !ISSAME(3*frame_delay/ ticks_per_frame, calculated_delay)
+            && !ISSAME(2*frame_delay/ ticks_per_frame, calculated_delay)
+            && !ISSAME(1*frame_delay/ ticks_per_frame, calculated_delay)
             ){
             if ( (prev_strange_framenum + 1 != framenum) &&( prev_strange_step < fabs(calculated_delay - frame_delay))) {
                 Debug(8 ,"Strange video pts step of %6.5f instead of %6.5f at frame %d\n", calculated_delay+0.0000005, frame_delay+0.0000005, framenum); // Unknown strange step
@@ -1890,8 +1902,6 @@ int stream_component_open(VideoState *is, int stream_index)
             codecCtx->thread_count= 1;
 #endif
         }
-        if (codecCtx->codec_id == AV_CODEC_ID_MPEG1VIDEO)
-            is->dec_ctx->ticks_per_frame = 1;
         if (demux_pid)
             selected_video_pid = is->video_st->id;
         /*
@@ -2078,7 +2088,7 @@ again:
         else
         {
             Debug(10, "Warning, no stream frame rate, deriving from codec\n");
-            is->fps = 1/(av_q2d(is->dec_ctx->time_base) * is->dec_ctx->ticks_per_frame );
+            is->fps = 1/(av_q2d(is->dec_ctx->time_base) * get_ticks_per_frame(is->dec_ctx));
         }
         set_fps( 1.0 / is->fps);
 //        Debug(1, "Stream frame rate is %5.3f f/s\n", is->fps);
@@ -2452,7 +2462,7 @@ nextpacket:
 
                     if ((live_tv && retries < live_tv_retries) /* || (selftest == 3 && retries == 0) */)
                     {
-                        double frame_delay = av_q2d(is->dec_ctx->time_base) * is->dec_ctx->ticks_per_frame;
+                        double frame_delay = av_q2d(is->dec_ctx->time_base) * get_ticks_per_frame(is->dec_ctx);
 //                    uint64_t retry_target;
                         if (retries == 0)
                         {
