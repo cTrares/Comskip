@@ -862,10 +862,12 @@ char *helptext[]=
 
     "Help: press any key to remove",
     "Key          Action",
-    "Arrows	        Reposition current location",
+    "Up/Down       Reposition by 1 second forward/backward",
+    "Left/Right    Reposition by 1 frame backward/forward",
     "PgUp/PgDn      Reposition current location",
     "Alt+PgUp/PgDn  Reposition current location by 1/2 second",
-    "n/p            Jump to next/previous cutpoint",
+    "n/m            Jump to previous/next commercial boundary",
+    "p              Jump to previous cutpoint",
     "e/b            Jump to next/previous end of cblock",
     "z/u            Zoom in/out on the timeline",
     "g              Graph on/off",
@@ -2845,34 +2847,98 @@ bool ReviewResult()
             }
             if (key == 37) curframe -= 1;
             if (key == 39) curframe += 1;
-            if (key == 38) curframe -= (int)fps;
-            if (key == 40) curframe += (int)fps;
+            if (key == 38) curframe += (int)fps;
+            if (key == 40) curframe -= (int)fps;
             if (key == 33) curframe -= (int)(20*fps);
             if (key == 133) curframe -= (int)(.5*fps);
             if (key == 34) curframe += (int)(20*fps);
             if (key == 134) curframe += (int)(.5*fps);
 
-            if (key == 78 || (key == 39 && shift))   // Next key
+            if (key == 'M' || (key == 39 && shift))   // Next commercial boundary
             {
-                curframe += 5;
                 if (framearray)
                 {
-                    i = 0;
-                    while (i <= commercial_count && curframe > commercial[i].end_frame) i++;
-                    //					if (i > 0)
-                    curframe = commercial[i].end_frame+5;
-//						while (curframe < frame_count && frame[curframe].isblack) curframe++;
-//						while (curframe < frame_count && !frame[curframe].isblack) curframe++;
-                    //					while (curframe < frame_count && frame[curframe].isblack) curframe++;
+                    for (i = 0; i <= commercial_count; i++)
+                    {
+                        j = min(max(commercial[i].start_frame, 1), frame_count-1);
+                        if (curframe < j)
+                        {
+                            curframe = j;
+                            break;
+                        }
+                        j = min(max(commercial[i].end_frame, 1), frame_count-1);
+                        if (curframe < j)
+                        {
+                            curframe = j;
+                            break;
+                        }
+                    }
+                    if (i > commercial_count && curframe < frame_count-1)
+                        curframe = frame_count-1;
                 }
                 else
                 {
-                    i = 0;
-                    while (i <= reffer_count && curframe > reffer[i].end_frame) i++;
-                    //					if (i > 0)
-                    curframe = reffer[i].end_frame+5;
+                    for (i = 0; i <= reffer_count; i++)
+                    {
+                        j = min(max(reffer[i].start_frame, 1), frame_count-1);
+                        if (curframe < j)
+                        {
+                            curframe = j;
+                            break;
+                        }
+                        j = min(max(reffer[i].end_frame, 1), frame_count-1);
+                        if (curframe < j)
+                        {
+                            curframe = j;
+                            break;
+                        }
+                    }
+                    if (i > reffer_count && curframe < frame_count-1)
+                        curframe = frame_count-1;
                 }
-                curframe -= 5;
+            }
+            if (key == 'N')   // Previous commercial boundary
+            {
+                if (framearray)
+                {
+                    for (i = commercial_count; i >= 0; i--)
+                    {
+                        j = min(max(commercial[i].end_frame, 1), frame_count-1);
+                        if (curframe > j)
+                        {
+                            curframe = j;
+                            break;
+                        }
+                        j = min(max(commercial[i].start_frame, 1), frame_count-1);
+                        if (curframe > j)
+                        {
+                            curframe = j;
+                            break;
+                        }
+                    }
+                    if (i < 0 && curframe > 1)
+                        curframe = 1;
+                }
+                else
+                {
+                    for (i = reffer_count; i >= 0; i--)
+                    {
+                        j = min(max(reffer[i].end_frame, 1), frame_count-1);
+                        if (curframe > j)
+                        {
+                            curframe = j;
+                            break;
+                        }
+                        j = min(max(reffer[i].start_frame, 1), frame_count-1);
+                        if (curframe > j)
+                        {
+                            curframe = j;
+                            break;
+                        }
+                    }
+                    if (i < 0 && curframe > 1)
+                        curframe = 1;
+                }
             }
             if (key == 80 || (key == 37 && shift))  	// Prev key
             {

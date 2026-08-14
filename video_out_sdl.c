@@ -203,7 +203,7 @@ void handle_event(SDL_Event event) {
           break;
         case SDLK_RIGHT:
           if (ks.mod & KMOD_SHIFT)
-            key = 78;
+            key = 77;
           else
             key = 39;
           break;
