@@ -453,12 +453,7 @@ static long FAR PASCAL event_procedure (HWND hwnd, UINT message,
 
 
      case WM_CLOSE:
-          //			ReleaseDC(hWnd, hDC);
-          //			DeleteObject(hBrush);
-
-          PostQuitMessage(0);
-          break;
-
+          key = 27;
           return 0;
 
      case WM_DESTROY:	/* just destroy the window */
