@@ -3156,7 +3156,7 @@ bool ReviewResult()
                 {
                     i = reffer_count;
                     while (i >= 0 && curframe < reffer[i].start_frame) i--;
-                    if (i == -1 || curframe > reffer[i].end_frame )   //Insert BEFORE i
+                    if ((i == -1 || curframe > reffer[i].end_frame) && reffer_count < MAX_COMMERCIALS - 1)   //Insert BEFORE i
                     {
                         j = reffer_count;
                         while (j > i)
@@ -3164,8 +3164,8 @@ bool ReviewResult()
                             reffer[j+1] = reffer[j];
                             j--;
                         }
-                        reffer[i+1].start_frame = max(curframe-1000,1);
-                        reffer[i+1].end_frame = min(curframe+1000,frame_count);
+                        reffer[i+1].start_frame = curframe;
+                        reffer[i+1].end_frame = curframe;
                         reffer_count++;
                         reviewDirty = true;
                         oldfrm = -1;
