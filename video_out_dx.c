@@ -299,6 +299,7 @@ static void update_overlay (dx_instance_t * instance)
 
 #define TIMELINE_HEIGHT 32
 #define DETAIL_HEIGHT 16
+#define MIN_VIDEO_DISPLAY_SIZE 16
 
 static int timeline_drag = 0;
 
@@ -306,6 +307,7 @@ static void update_layout (dx_instance_t * instance)
 {
      int available_width;
      int available_height;
+     int content_top;
      int video_width;
      int video_height;
      double scale;
@@ -318,26 +320,36 @@ static void update_layout (dx_instance_t * instance)
      instance->timeline_rect.right = instance->client_width;
      instance->timeline_rect.bottom = min(TIMELINE_HEIGHT,
                                            instance->client_height);
+     SetRectEmpty(&instance->video_rect);
 
+     content_top = min(instance->timeline_rect.bottom +
+                       2 * DETAIL_HEIGHT, instance->client_height);
      available_width = instance->client_width;
-     available_height = instance->client_height -
-                        instance->timeline_rect.bottom;
+     available_height = instance->client_height - content_top;
      video_width = instance->width;
      video_height = instance->height - TIMELINE_HEIGHT;
      scale = 1.0;
+
+     if (available_width <= 0 || available_height <= 0 ||
+               video_width <= 0 || video_height <= 0)
+          return;
 
      if (video_width > 0 && available_width < video_width)
           scale = (double) available_width / video_width;
      if (video_height > 0 && available_height < video_height &&
                (double) available_height / video_height < scale)
           scale = (double) available_height / video_height;
-     if (scale < 0.0)
-          scale = 0.0;
+     if (scale <= 0.0)
+          return;
 
-     video_width = (int)(video_width * scale);
-     video_height = (int)(video_height * scale);
+     video_width = min((int)(video_width * scale + 0.5), available_width);
+     video_height = min((int)(video_height * scale + 0.5), available_height);
+     if (video_width < MIN_VIDEO_DISPLAY_SIZE ||
+               video_height < MIN_VIDEO_DISPLAY_SIZE)
+          return;
      instance->video_rect.left = (instance->client_width - video_width) / 2;
-     instance->video_rect.top = instance->timeline_rect.bottom;
+     instance->video_rect.top = content_top +
+                                (available_height - video_height) / 2;
      instance->video_rect.right = instance->video_rect.left + video_width;
      instance->video_rect.bottom = instance->video_rect.top + video_height;
 }
@@ -518,7 +530,10 @@ static long FAR PASCAL event_procedure (HWND hwnd, UINT message,
                break;
           }
           if (wParam != 0) {
-               key = wParam;
+               if (wParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000))
+                    key = REVIEW_KEY_UNDO;
+               else
+                    key = wParam;
                if (key == 'C')
  //                 if(PopFileDlg(hwnd, osname, SAVE_DMP) == 0)
  //                        key = 0;
@@ -830,6 +845,8 @@ static void dxrgb_draw_frame (dx_instance_t * _instance,
      check_events (instance);
 
      hdc = GetDC(instance->window);
+     if (!hdc)
+          return;
      FillRect(hdc, &((RECT) {0, 0, instance->client_width,
                              instance->client_height}),
               (HBRUSH)GetStockObject(BLACK_BRUSH));
@@ -849,7 +866,12 @@ static void dxrgb_draw_frame (dx_instance_t * _instance,
                         DIB_RGB_COLORS, SRCCOPY);
 
      if (instance->video_rect.right > instance->video_rect.left &&
-               instance->video_rect.bottom > instance->video_rect.top)
+               instance->video_rect.bottom > instance->video_rect.top &&
+               instance->width > 0 &&
+               instance->height > TIMELINE_HEIGHT) {
+          SetStretchBltMode(hdc, HALFTONE);
+          SetBrushOrgEx(hdc, instance->video_rect.left,
+                        instance->video_rect.top, NULL);
           StretchDIBits(hdc,
                         instance->video_rect.left,
                         instance->video_rect.top,
@@ -859,6 +881,7 @@ static void dxrgb_draw_frame (dx_instance_t * _instance,
                         instance->height - TIMELINE_HEIGHT,
                         *buf, (LPBITMAPINFO)lpbirgb,
                         DIB_RGB_COLORS, SRCCOPY);
+     }
      ReleaseDC(instance->window, hdc);
 
      return;

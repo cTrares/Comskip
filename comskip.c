@@ -439,12 +439,14 @@ struct
 } commercial[MAX_COMMERCIALS];
 
 
-int		reffer_count = -1;
-struct
+typedef struct
 {
     long	start_frame;
     long	end_frame;
-} reffer[MAX_COMMERCIALS];
+} reffer_info;
+
+int		reffer_count = -1;
+reffer_info reffer[MAX_COMMERCIALS];
 
 
 
@@ -885,6 +887,7 @@ char *helptext[]=
     "b              Set begin of commercial to this position",
     "i              Insert a new commercial",
     "d              Delete the commercial at current location",
+    "Ctrl+Z         Undo last edit",
     "s              Jump to Start of the recording",
     "f              Jump to Finish of the recording",
      "",
@@ -2616,6 +2619,23 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
                 else if (reffer_count >= 0) PIXEL(x,y) = r;
             }
         }
+
+        if (loadingTXT && reffer_count >= 0 && v > 0)
+        {
+            for (i = 0; i <= reffer_count; i++)
+            {
+                if (reffer[i].start_frame == reffer[i].end_frame &&
+                        reffer[i].start_frame >= zstart &&
+                        reffer[i].start_frame < zstart + v)
+                {
+                    x = (int)((double)(reffer[i].start_frame - zstart) *
+                              owidth / v);
+                    for (j = max(0, x - 1); j <= min(owidth - 1, x + 1); j++)
+                        for (y = bartop; y < bartop + 20; y++)
+                            SETPIXEL(j,y,255,128,0);
+                }
+            }
+        }
         vo_draw(graph);
 
         //		sprintf(t, "%8i %8i %1s %1s", frm, framenum_infer, (frame[frm].isblack?"B":" "), (frame[frm].volume<max_volume?"S":" "));
@@ -2763,6 +2783,92 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
 
 static int shift = 0;
 
+#define REVIEW_UNDO_STEPS 10
+
+typedef struct
+{
+    reffer_info *blocks;
+    int reffer_count;
+    bool reviewDirty;
+} review_undo_snapshot;
+
+typedef struct
+{
+    review_undo_snapshot snapshots[REVIEW_UNDO_STEPS];
+    int start;
+    int count;
+} review_undo_history;
+
+static void ClearReviewUndoHistory(review_undo_history *history)
+{
+    int i;
+
+    for (i = 0; i < history->count; i++)
+    {
+        int index = (history->start + i) % REVIEW_UNDO_STEPS;
+        free(history->snapshots[index].blocks);
+        history->snapshots[index].blocks = NULL;
+    }
+    history->start = 0;
+    history->count = 0;
+}
+
+static bool PushReviewUndo(review_undo_history *history, bool reviewDirty)
+{
+    reffer_info *blocks = NULL;
+    int block_count = reffer_count + 1;
+    int index;
+
+    if (block_count > 0)
+    {
+        blocks = malloc(block_count * sizeof(*blocks));
+        if (!blocks)
+            return false;
+        memcpy(blocks, reffer, block_count * sizeof(*blocks));
+    }
+
+    if (history->count == REVIEW_UNDO_STEPS)
+    {
+        index = history->start;
+        history->start = (history->start + 1) % REVIEW_UNDO_STEPS;
+    }
+    else
+    {
+        index = (history->start + history->count) % REVIEW_UNDO_STEPS;
+        history->count++;
+    }
+
+    free(history->snapshots[index].blocks);
+    history->snapshots[index].blocks = blocks;
+    history->snapshots[index].reffer_count = reffer_count;
+    history->snapshots[index].reviewDirty = reviewDirty;
+    return true;
+}
+
+static bool RestoreReviewUndo(review_undo_history *history, bool *reviewDirty)
+{
+    review_undo_snapshot *snapshot;
+    int block_count;
+    int index;
+
+    if (history->count == 0)
+        return false;
+
+    index = (history->start + history->count - 1) % REVIEW_UNDO_STEPS;
+    snapshot = &history->snapshots[index];
+    block_count = snapshot->reffer_count + 1;
+    if (block_count > 0)
+        memcpy(reffer, snapshot->blocks, block_count * sizeof(*reffer));
+    reffer_count = snapshot->reffer_count;
+    *reviewDirty = snapshot->reviewDirty;
+    free(snapshot->blocks);
+    snapshot->blocks = NULL;
+    history->count--;
+    if (history->count == 0)
+        history->start = 0;
+    return true;
+}
+
 void Recalc()
 {
     BuildBlocks(true);
@@ -2815,6 +2921,7 @@ bool ReviewResult()
     int grf = 2;
     int i,j;
     bool reviewDirty = false;
+    review_undo_history undoHistory = {0};
     char tsfilename[MAX_PATH];
     if (!framearray) grf = 0;
     output_demux = 0;
@@ -2868,6 +2975,7 @@ bool ReviewResult()
                 {
                     SaveReviewResult();
                     reviewDirty = false;
+                    ClearReviewUndoHistory(&undoHistory);
                     exit(0);
                 }
                 if (i == REVIEW_SAVE_CONFIRM_NO)
@@ -2893,6 +3001,11 @@ bool ReviewResult()
             if (key == 16)
             {
                 shift = 1;
+            }
+            if (key == REVIEW_KEY_UNDO && !framearray)
+            {
+                if (RestoreReviewUndo(&undoHistory, &reviewDirty))
+                    oldfrm = -1;
             }
             if (key == 37) curframe -= 1;
             if (key == 39) curframe += 1;
@@ -3053,8 +3166,13 @@ bool ReviewResult()
                     if (i >= 0)
                     {
                         if (reffer[i].end_frame != curframe)
-                            reviewDirty = true;
-                        reffer[i].end_frame = curframe;
+                        {
+                            if (PushReviewUndo(&undoHistory, reviewDirty))
+                            {
+                                reffer[i].end_frame = curframe;
+                                reviewDirty = true;
+                            }
+                        }
                     }
                     oldfrm = -1;
                 }
@@ -3077,8 +3195,13 @@ bool ReviewResult()
                     if (i <= reffer_count)
                     {
                         if (reffer[i].start_frame != curframe)
-                            reviewDirty = true;
-                        reffer[i].start_frame = curframe;
+                        {
+                            if (PushReviewUndo(&undoHistory, reviewDirty))
+                            {
+                                reffer[i].start_frame = curframe;
+                                reviewDirty = true;
+                            }
+                        }
                     }
                     oldfrm = -1;
                 }
@@ -3123,7 +3246,8 @@ bool ReviewResult()
                 {
                     i = reffer_count;
                     while (i >= 0 && curframe < reffer[i].start_frame) i--;
-                    if (i >= 0 && reffer[i].start_frame <= curframe && curframe <= reffer[i].end_frame )
+                    if (i >= 0 && reffer[i].start_frame <= curframe && curframe <= reffer[i].end_frame &&
+                            PushReviewUndo(&undoHistory, reviewDirty))
                     {
                         while (i < reffer_count)
                         {
@@ -3156,7 +3280,8 @@ bool ReviewResult()
                 {
                     i = reffer_count;
                     while (i >= 0 && curframe < reffer[i].start_frame) i--;
-                    if ((i == -1 || curframe > reffer[i].end_frame) && reffer_count < MAX_COMMERCIALS - 1)   //Insert BEFORE i
+                    if ((i == -1 || curframe > reffer[i].end_frame) && reffer_count < MAX_COMMERCIALS - 1 &&
+                            PushReviewUndo(&undoHistory, reviewDirty))   //Insert BEFORE i
                     {
                         j = reffer_count;
                         while (j > i)
@@ -3176,6 +3301,7 @@ bool ReviewResult()
             {
                 SaveReviewResult();
                 reviewDirty = false;
+                ClearReviewUndoHistory(&undoHistory);
             }
             if (key == 'Z')
             {
