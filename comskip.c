@@ -3297,8 +3297,33 @@ bool ReviewResult()
         }
         if (lMouseDown)
         {
-            if (yPos >= bartop && yPos < bartop + 30)
-                curframe = zstart+frame_count * xPos / owidth / zfactor + 1;
+            int timeline_left = 0;
+            int timeline_top = bartop;
+            int timeline_right = owidth;
+            int timeline_bottom = bartop + 30;
+            int timeline_navigation = 0;
+
+#ifdef _WIN32
+            timeline_navigation = vo_get_timeline_rect(&timeline_left,
+                                                       &timeline_top,
+                                                       &timeline_right,
+                                                       &timeline_bottom);
+#else
+            timeline_navigation = yPos >= timeline_top &&
+                                  yPos < timeline_bottom;
+#endif
+
+            if (timeline_navigation && timeline_right > timeline_left &&
+                    zfactor > 0)
+            {
+                int visible_frames = frame_count / zfactor;
+                int timeline_x = max(timeline_left,
+                                     min(xPos, timeline_right - 1));
+                curframe = zstart +
+                           (int)((double)visible_frames *
+                                 (timeline_x - timeline_left) /
+                                 (timeline_right - timeline_left)) + 1;
+            }
             lMouseDown = 0;
         }
         if (curframe < 1) curframe = 1;

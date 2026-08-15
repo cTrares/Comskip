@@ -87,6 +87,10 @@ typedef struct {
 //    vo_instance_t vo;
      int width;
      int height;
+     int client_width;
+     int client_height;
+     RECT timeline_rect;
+     RECT video_rect;
 
      HWND window;
      RECT window_coords;
@@ -293,7 +297,59 @@ static void update_overlay (dx_instance_t * instance)
                                         dwFlags, &ddofx);
 }
 
-static int drag = 0;
+#define TIMELINE_HEIGHT 32
+#define DETAIL_HEIGHT 16
+
+static int timeline_drag = 0;
+
+static void update_layout (dx_instance_t * instance)
+{
+     int available_width;
+     int available_height;
+     int video_width;
+     int video_height;
+     double scale;
+
+     if (!instance)
+          return;
+
+     instance->timeline_rect.left = 0;
+     instance->timeline_rect.top = 0;
+     instance->timeline_rect.right = instance->client_width;
+     instance->timeline_rect.bottom = min(TIMELINE_HEIGHT,
+                                           instance->client_height);
+
+     available_width = instance->client_width;
+     available_height = instance->client_height -
+                        instance->timeline_rect.bottom;
+     video_width = instance->width;
+     video_height = instance->height - TIMELINE_HEIGHT;
+     scale = 1.0;
+
+     if (video_width > 0 && available_width < video_width)
+          scale = (double) available_width / video_width;
+     if (video_height > 0 && available_height < video_height &&
+               (double) available_height / video_height < scale)
+          scale = (double) available_height / video_height;
+     if (scale < 0.0)
+          scale = 0.0;
+
+     video_width = (int)(video_width * scale);
+     video_height = (int)(video_height * scale);
+     instance->video_rect.left = (instance->client_width - video_width) / 2;
+     instance->video_rect.top = instance->timeline_rect.bottom;
+     instance->video_rect.right = instance->video_rect.left + video_width;
+     instance->video_rect.bottom = instance->video_rect.top + video_height;
+}
+
+static int point_in_timeline (dx_instance_t * instance, int x, int y)
+{
+     return instance &&
+            x >= instance->timeline_rect.left &&
+            x < instance->timeline_rect.right &&
+            y >= instance->timeline_rect.top &&
+            y < instance->timeline_rect.bottom;
+}
 
 
 static HANDLE hThread;
@@ -352,21 +408,26 @@ static long FAR PASCAL event_procedure (HWND hwnd, UINT message,
      case WM_WINDOWPOSCHANGED:
           instance = (dx_instance_t *) GetWindowLongPtr (hwnd, GWLP_USERDATA);
 
-          /* update the window position and size */
-          point_window.x = 0;
-          point_window.y = 0;
-          ClientToScreen (hwnd, &point_window);
-          instance->window_coords.left = point_window.x;
-          instance->window_coords.top = point_window.y;
-          GetClientRect (hwnd, &rect_window);
-          instance->window_coords.right = rect_window.right + point_window.x;
-          instance->window_coords.bottom = rect_window.bottom + point_window.y;
+          if (instance) {
+               /* update the window position and size */
+               point_window.x = 0;
+               point_window.y = 0;
+               ClientToScreen (hwnd, &point_window);
+               instance->window_coords.left = point_window.x;
+               instance->window_coords.top = point_window.y;
+               GetClientRect (hwnd, &rect_window);
+               instance->client_width = rect_window.right - rect_window.left;
+               instance->client_height = rect_window.bottom - rect_window.top;
+               update_layout (instance);
+               instance->window_coords.right = rect_window.right + point_window.x;
+               instance->window_coords.bottom = rect_window.bottom + point_window.y;
 
-          key = '.';
+               key = '.';
 
-          /* update the overlay */
-          if (instance->overlay && instance->display)
-               update_overlay (instance);
+               /* update the overlay */
+               if (instance->overlay && instance->display)
+                    update_overlay (instance);
+          }
 
           //	return 0;
 
@@ -393,26 +454,39 @@ static long FAR PASCAL event_procedure (HWND hwnd, UINT message,
           return 0;
 
      case WM_LBUTTONDOWN:
-          if (lParam > -1) {
-               xPos = (int)(LOWORD(lParam));
-               yPos = (int)(HIWORD(lParam));
+          instance = (dx_instance_t *) GetWindowLongPtr (hwnd, GWLP_USERDATA);
+          xPos = (int)(short)LOWORD(lParam);
+          yPos = (int)(short)HIWORD(lParam);
+          if (point_in_timeline(instance, xPos, yPos)) {
                lMouseDown = 1;
-               drag = 1;
+               timeline_drag = 1;
+               SetCapture(hwnd);
           }
           break;
      case WM_MOUSEMOVE:
-          if (lParam > -1 && drag) {
-               xPos = (int)(LOWORD(lParam));
-               yPos = (int)(HIWORD(lParam));
+          if (timeline_drag) {
+               xPos = (int)(short)LOWORD(lParam);
+               yPos = (int)(short)HIWORD(lParam);
                lMouseDown = 1;
-
           }
           break;
      case WM_LBUTTONUP:
-          if (lParam > -1) {
-               drag = 0;
-
+          if (timeline_drag) {
+               xPos = (int)(short)LOWORD(lParam);
+               yPos = (int)(short)HIWORD(lParam);
+               lMouseDown = 1;
+               timeline_drag = 0;
+               if (GetCapture() == hwnd)
+                    ReleaseCapture();
           }
+          break;
+     case WM_CANCELMODE:
+          timeline_drag = 0;
+          if (GetCapture() == hwnd)
+               ReleaseCapture();
+          break;
+     case WM_CAPTURECHANGED:
+          timeline_drag = 0;
           break;
 
 
@@ -543,9 +617,13 @@ static int create_window (dx_instance_t * instance)
       * (for later use in event_handler).
       * We need to use SetWindowLongPtr when it is available in mingw */
      SetWindowLongPtr (instance->window, GWLP_USERDATA, (LONG_PTR) instance);
-     SetWindowPos(instance->window, HWND_TOP, 100, 0, 0, 0, SWP_SHOWWINDOW|SWP_NOSIZE);
 
-     ShowWindow (instance->window, SW_SHOW);
+     GetClientRect (instance->window, &rect_window);
+     instance->client_width = rect_window.right - rect_window.left;
+     instance->client_height = rect_window.bottom - rect_window.top;
+     update_layout (instance);
+
+     ShowWindow (instance->window, SW_SHOWMAXIMIZED);
 
      return 0;
 }
@@ -752,8 +830,36 @@ static void dxrgb_draw_frame (dx_instance_t * _instance,
      check_events (instance);
 
      hdc = GetDC(instance->window);
-     SetDIBitsToDevice(hdc, 0, 0, instance->width, instance->height,
-                       0, 0, 0, instance->height, *buf, (LPBITMAPINFO)lpbirgb, DIB_RGB_COLORS);
+     FillRect(hdc, &((RECT) {0, 0, instance->client_width,
+                             instance->client_height}),
+              (HBRUSH)GetStockObject(BLACK_BRUSH));
+
+     if (instance->timeline_rect.right > instance->timeline_rect.left &&
+               instance->timeline_rect.bottom > instance->timeline_rect.top)
+          StretchDIBits(hdc,
+                        instance->timeline_rect.left,
+                        instance->timeline_rect.top,
+                        instance->timeline_rect.right -
+                        instance->timeline_rect.left,
+                        instance->timeline_rect.bottom -
+                        instance->timeline_rect.top,
+                        0, instance->height - TIMELINE_HEIGHT,
+                        instance->width, TIMELINE_HEIGHT,
+                        *buf, (LPBITMAPINFO)lpbirgb,
+                        DIB_RGB_COLORS, SRCCOPY);
+
+     if (instance->video_rect.right > instance->video_rect.left &&
+               instance->video_rect.bottom > instance->video_rect.top)
+          StretchDIBits(hdc,
+                        instance->video_rect.left,
+                        instance->video_rect.top,
+                        instance->video_rect.right - instance->video_rect.left,
+                        instance->video_rect.bottom - instance->video_rect.top,
+                        0, 0, instance->width,
+                        instance->height - TIMELINE_HEIGHT,
+                        *buf, (LPBITMAPINFO)lpbirgb,
+                        DIB_RGB_COLORS, SRCCOPY);
+     ReleaseDC(instance->window, hdc);
 
      return;
 
@@ -922,6 +1028,20 @@ unsigned char *(buffer[3]) = {buf0,buf1,buf2};
 dx_instance_t * instance;
 vo_setup_result_t result;
 
+int vo_get_timeline_rect(int *left, int *top, int *right, int *bottom)
+{
+     if (!instance || !left || !top || !right || !bottom ||
+               instance->timeline_rect.right <= instance->timeline_rect.left ||
+               instance->timeline_rect.bottom <= instance->timeline_rect.top)
+          return 0;
+
+     *left = instance->timeline_rect.left;
+     *top = instance->timeline_rect.top;
+     *right = instance->timeline_rect.right;
+     *bottom = instance->timeline_rect.bottom;
+     return 1;
+}
+
 void vo_init(int width, int height, char *title)
 {
 //	width -= 30;
@@ -994,32 +1114,52 @@ int firstTime = 1;
 
 void ShowDetails(char *t)
 {
+     HDC text_dc;
      int l;
+     int y;
+
+     if (!instance || !instance->window)
+          return;
+
+     text_dc = GetDC(instance->window);
+     if (!text_dc)
+          return;
+
      l = strlen(t);
-     TextOut(hdc, 0, 30, t, l);
+     y = instance->timeline_rect.bottom;
+     SetBkColor(text_dc, RGB(255, 255, 255));
+     SetTextColor(text_dc, RGB(0, 0, 0));
+     TextOut(text_dc, 0, y, t, l);
      if (firstTime) {
-          TextOut(hdc, 0, 30+16, "Press F1 for help", 17);
+          TextOut(text_dc, 0, y + DETAIL_HEIGHT, "Press F1 for help", 17);
           firstTime = 0;
      }
-     hdc = BeginPaint(instance->window, &ps);
-     EndPaint(instance->window, &ps);
-     ReleaseDC(instance->window, hdc);
-
+     ReleaseDC(instance->window, text_dc);
 }
 
 void ShowHelp(char **ta)
 {
+     HDC text_dc;
      char *t;
      int l;
      int i = 0;
+
+     if (!instance || !instance->window)
+          return;
+
+     text_dc = GetDC(instance->window);
+     if (!text_dc)
+          return;
+
+     SetBkColor(text_dc, RGB(255, 255, 255));
+     SetTextColor(text_dc, RGB(0, 0, 0));
      while ((t = *ta)) {
           l = strlen(t);
-          TextOut(hdc, 0, 30+16*i++, t, l);
+          TextOut(text_dc, 0,
+                  instance->timeline_rect.bottom + DETAIL_HEIGHT * i++, t, l);
           ta++;
      }
-     hdc = BeginPaint(instance->window, &ps);
-     EndPaint(instance->window, &ps);
-     ReleaseDC(instance->window, hdc);
+     ReleaseDC(instance->window, text_dc);
 }
 
 
