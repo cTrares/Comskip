@@ -2775,6 +2775,37 @@ void Recalc()
     OutputBlocks();
 }
 
+static void SaveReviewResult(void)
+{
+    int i;
+    long prev = -1;
+
+    output_default = true;
+    OpenOutputFiles();
+    if (framearray)
+    {
+        for (i = 0; i <= commercial_count; i++)
+        {
+            OutputCommercialBlock(i, prev, commercial[i].start_frame, commercial[i].end_frame, (commercial[i].end_frame < frame_count-2 ? false : true));
+            prev = commercial[i].end_frame;
+        }
+        if (commercial[commercial_count].end_frame < frame_count-2)
+            OutputCommercialBlock(commercial_count, prev, frame_count-2, frame_count-1, true);
+    }
+    else
+    {
+        for (i = 0; i <= reffer_count; i++)
+        {
+            OutputCommercialBlock(i, prev, reffer[i].start_frame, reffer[i].end_frame, (reffer[i].end_frame < frame_count-2 ? false : true));
+            prev = reffer[i].end_frame;
+        }
+        if (reffer[reffer_count].end_frame < frame_count-2)
+            OutputCommercialBlock(reffer_count, prev, frame_count-2, frame_count-1, true);
+    }
+    output_default = false;
+    oldfrm = -1;
+}
+
 bool ReviewResult()
 {
     FILE *review_file = NULL;
@@ -2783,7 +2814,7 @@ bool ReviewResult()
     int bartop = 0;
     int grf = 2;
     int i,j;
-    long prev;
+    bool reviewDirty = false;
     char tsfilename[MAX_PATH];
     if (!framearray) grf = 0;
     output_demux = 0;
@@ -2827,7 +2858,25 @@ bool ReviewResult()
 
         if (key != 0)
         {
-            if (key == 27) if (!helpflag) exit(0);
+            if (key == 27 && !helpflag)
+            {
+                if (!reviewDirty)
+                    exit(0);
+#ifdef _WIN32
+                i = ConfirmReviewSave();
+                if (i == REVIEW_SAVE_CONFIRM_YES)
+                {
+                    SaveReviewResult();
+                    reviewDirty = false;
+                    exit(0);
+                }
+                if (i == REVIEW_SAVE_CONFIRM_NO)
+                    exit(0);
+                key = 0;
+#else
+                exit(0);
+#endif
+            }
             if (key == 112)
             {
                 helpflag = 1;     // F1 Key
@@ -3002,7 +3051,11 @@ bool ReviewResult()
                     i = reffer_count;
                     while (i >= 0 && curframe < reffer[i].start_frame) i--;
                     if (i >= 0)
+                    {
+                        if (reffer[i].end_frame != curframe)
+                            reviewDirty = true;
                         reffer[i].end_frame = curframe;
+                    }
                     oldfrm = -1;
                 }
             }
@@ -3022,7 +3075,11 @@ bool ReviewResult()
                     i = 0;
                     while (i <= reffer_count && curframe > reffer[i].end_frame) i++;
                     if (i <= reffer_count)
+                    {
+                        if (reffer[i].start_frame != curframe)
+                            reviewDirty = true;
                         reffer[i].start_frame = curframe;
+                    }
                     oldfrm = -1;
                 }
             }
@@ -3039,6 +3096,7 @@ bool ReviewResult()
                         else
                             cblock[i].score = 0.01;
                         cblock[i].cause |= C_F;
+                        reviewDirty = true;
                         oldfrm = -1;
                         BuildCommercial();
                         key = 'W';			// Trick to cause writing of the new commercial list
@@ -3053,6 +3111,8 @@ bool ReviewResult()
                     while (i < block_count && curframe > cblock[i].f_end) i++;
                     if (i < block_count)
                     {
+                        if (cblock[i].score != 99.99 || !(cblock[i].cause & C_F))
+                            reviewDirty = true;
                         cblock[i].score = 99.99;
                         cblock[i].cause |= C_F;
                         oldfrm = -1;
@@ -3071,6 +3131,7 @@ bool ReviewResult()
                             i++;
                         }
                         reffer_count--;
+                        reviewDirty = true;
                         oldfrm = -1;
                     }
                 }
@@ -3083,6 +3144,8 @@ bool ReviewResult()
                     while (i < block_count && curframe > cblock[i].f_end) i++;
                     if (i < block_count)
                     {
+                        if (cblock[i].score != 0.01 || !(cblock[i].cause & C_F))
+                            reviewDirty = true;
                         cblock[i].score = 0.01;
                         cblock[i].cause |= C_F;
                         oldfrm = -1;
@@ -3104,38 +3167,15 @@ bool ReviewResult()
                         reffer[i+1].start_frame = max(curframe-1000,1);
                         reffer[i+1].end_frame = min(curframe+1000,frame_count);
                         reffer_count++;
+                        reviewDirty = true;
                         oldfrm = -1;
                     }
                 }
             }
             if (key == 'W')   // W key
             {
-                output_default = true;
-                OpenOutputFiles();
-                if (framearray)
-                {
-                    prev = -1;
-                    for (i = 0; i <= commercial_count; i++)
-                    {
-                        OutputCommercialBlock(i, prev, commercial[i].start_frame, commercial[i].end_frame, (commercial[i].end_frame < frame_count-2 ? false : true));
-                        prev = commercial[i].end_frame;
-                    }
-                    if (commercial[commercial_count].end_frame < frame_count-2)
-                        OutputCommercialBlock(commercial_count, prev, frame_count-2, frame_count-1, true);
-                }
-                else
-                {
-                    prev = -1;
-                    for (i = 0; i <= reffer_count; i++)
-                    {
-                        OutputCommercialBlock(i, prev, reffer[i].start_frame, reffer[i].end_frame, (reffer[i].end_frame < frame_count-2 ? false : true));
-                        prev = reffer[i].end_frame;
-                    }
-                    if (reffer[reffer_count].end_frame < frame_count-2)
-                        OutputCommercialBlock(reffer_count, prev, frame_count-2, frame_count-1, true);
-                }
-                output_default = false;
-                oldfrm = -1;
+                SaveReviewResult();
+                reviewDirty = false;
             }
             if (key == 'Z')
             {

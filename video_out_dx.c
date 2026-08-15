@@ -26,6 +26,7 @@
 //#include "config.h"
 
 #include "resource.h"
+#include "vo.h"
 
 
 
@@ -939,6 +940,20 @@ void vo_init(int width, int height, char *title)
      dx_setup( instance, width, height, width, height, &result);
 #endif
 
+}
+
+int ConfirmReviewSave(void)
+{
+     int result = MessageBoxW(instance ? instance->window : NULL,
+                              L"M\u00f6chten Sie die vorgenommenen \u00c4nderungen speichern?",
+                              L"Comskip",
+                              MB_YESNOCANCEL | MB_ICONQUESTION | MB_DEFBUTTON1);
+
+     if (result == IDYES)
+          return REVIEW_SAVE_CONFIRM_YES;
+     if (result == IDNO)
+          return REVIEW_SAVE_CONFIRM_NO;
+     return REVIEW_SAVE_CONFIRM_CANCEL;
 }
 
 void vo_draw(unsigned char * buf)
