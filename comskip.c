@@ -2720,6 +2720,7 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
         }
         else
             ShowDetails(t);
+        vo_present();
     }
     if (key == 0x20)
     {
@@ -2765,7 +2766,10 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
         }
 
         while(key == 0)
+        {
             vo_draw(graph);
+            vo_present();
+        }
         if (key == 27)
         {
             exit(1);

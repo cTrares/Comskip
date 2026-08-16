@@ -91,6 +91,13 @@ typedef struct {
      int client_height;
      RECT timeline_rect;
      RECT video_rect;
+     HDC backbuffer_dc;
+     HBITMAP backbuffer_bitmap;
+     HGDIOBJ backbuffer_old_bitmap;
+     int backbuffer_width;
+     int backbuffer_height;
+     int backbuffer_ready;
+     int backbuffer_valid;
 
      HWND window;
      RECT window_coords;
@@ -363,6 +370,105 @@ static int point_in_timeline (dx_instance_t * instance, int x, int y)
             y < instance->timeline_rect.bottom;
 }
 
+static void destroy_backbuffer (dx_instance_t * instance)
+{
+     if (!instance)
+          return;
+
+     if (instance->backbuffer_dc && instance->backbuffer_old_bitmap)
+          SelectObject(instance->backbuffer_dc,
+                       instance->backbuffer_old_bitmap);
+     if (instance->backbuffer_bitmap)
+          DeleteObject(instance->backbuffer_bitmap);
+     if (instance->backbuffer_dc)
+          DeleteDC(instance->backbuffer_dc);
+
+     instance->backbuffer_dc = NULL;
+     instance->backbuffer_bitmap = NULL;
+     instance->backbuffer_old_bitmap = NULL;
+     instance->backbuffer_width = 0;
+     instance->backbuffer_height = 0;
+     instance->backbuffer_ready = 0;
+     instance->backbuffer_valid = 0;
+}
+
+static int ensure_backbuffer (dx_instance_t * instance)
+{
+     HDC window_dc;
+     HDC backbuffer_dc;
+     HBITMAP backbuffer_bitmap;
+     HGDIOBJ backbuffer_old_bitmap;
+     RECT rect;
+
+     if (!instance || !instance->window || instance->client_width <= 0 ||
+               instance->client_height <= 0)
+          return 0;
+
+     if (instance->backbuffer_dc && instance->backbuffer_bitmap &&
+               instance->backbuffer_width == instance->client_width &&
+               instance->backbuffer_height == instance->client_height)
+          return 1;
+
+     destroy_backbuffer(instance);
+     window_dc = GetDC(instance->window);
+     if (!window_dc)
+          return 0;
+
+     backbuffer_dc = CreateCompatibleDC(window_dc);
+     backbuffer_bitmap = CreateCompatibleBitmap(window_dc,
+                                                 instance->client_width,
+                                                 instance->client_height);
+     ReleaseDC(instance->window, window_dc);
+     if (!backbuffer_dc || !backbuffer_bitmap)
+     {
+          if (backbuffer_bitmap)
+               DeleteObject(backbuffer_bitmap);
+          if (backbuffer_dc)
+               DeleteDC(backbuffer_dc);
+          return 0;
+     }
+
+     backbuffer_old_bitmap = SelectObject(backbuffer_dc,
+                                           backbuffer_bitmap);
+     if (!backbuffer_old_bitmap || backbuffer_old_bitmap == HGDI_ERROR)
+     {
+          DeleteObject(backbuffer_bitmap);
+          DeleteDC(backbuffer_dc);
+          return 0;
+     }
+
+     instance->backbuffer_dc = backbuffer_dc;
+     instance->backbuffer_bitmap = backbuffer_bitmap;
+     instance->backbuffer_old_bitmap = backbuffer_old_bitmap;
+     instance->backbuffer_width = instance->client_width;
+     instance->backbuffer_height = instance->client_height;
+     instance->backbuffer_ready = 0;
+     instance->backbuffer_valid = 0;
+
+     SetRect(&rect, 0, 0, instance->client_width, instance->client_height);
+     FillRect(instance->backbuffer_dc, &rect,
+              (HBRUSH)GetStockObject(BLACK_BRUSH));
+     return 1;
+}
+
+static void present_backbuffer (dx_instance_t * instance)
+{
+     HDC window_dc;
+
+     if (!instance || !instance->window || !instance->backbuffer_ready ||
+               !instance->backbuffer_dc)
+          return;
+
+     instance->backbuffer_valid = 1;
+     window_dc = GetDC(instance->window);
+     if (!window_dc)
+          return;
+     BitBlt(window_dc, 0, 0, instance->backbuffer_width,
+            instance->backbuffer_height, instance->backbuffer_dc,
+            0, 0, SRCCOPY);
+     ReleaseDC(instance->window, window_dc);
+}
+
 
 static HANDLE hThread;
 static DWORD threadId;
@@ -421,6 +527,9 @@ static long FAR PASCAL event_procedure (HWND hwnd, UINT message,
           instance = (dx_instance_t *) GetWindowLongPtr (hwnd, GWLP_USERDATA);
 
           if (instance) {
+               int old_client_width = instance->client_width;
+               int old_client_height = instance->client_height;
+
                /* update the window position and size */
                point_window.x = 0;
                point_window.y = 0;
@@ -430,6 +539,9 @@ static long FAR PASCAL event_procedure (HWND hwnd, UINT message,
                GetClientRect (hwnd, &rect_window);
                instance->client_width = rect_window.right - rect_window.left;
                instance->client_height = rect_window.bottom - rect_window.top;
+               if (instance->client_width != old_client_width ||
+                         instance->client_height != old_client_height)
+                    destroy_backbuffer(instance);
                update_layout (instance);
                instance->window_coords.right = rect_window.right + point_window.x;
                instance->window_coords.bottom = rect_window.bottom + point_window.y;
@@ -441,14 +553,28 @@ static long FAR PASCAL event_procedure (HWND hwnd, UINT message,
                     update_overlay (instance);
           }
 
-          //	return 0;
+          break;
 
      case WM_PAINT:
           hdc = BeginPaint(hwnd, &ps);
+          instance = (dx_instance_t *) GetWindowLongPtr (hwnd, GWLP_USERDATA);
+          if (instance && instance->backbuffer_valid &&
+                    instance->backbuffer_dc)
+               BitBlt(hdc, ps.rcPaint.left, ps.rcPaint.top,
+                      ps.rcPaint.right - ps.rcPaint.left,
+                      ps.rcPaint.bottom - ps.rcPaint.top,
+                      instance->backbuffer_dc, ps.rcPaint.left,
+                      ps.rcPaint.top, SRCCOPY);
+          else
+               FillRect(hdc, &ps.rcPaint,
+                        (HBRUSH)GetStockObject(BLACK_BRUSH));
           EndPaint(hwnd, &ps);
-          ReleaseDC(hwnd, hdc);
-          key = '.';
+          return 0;
 
+     case WM_ERASEBKGND:
+          instance = (dx_instance_t *) GetWindowLongPtr (hwnd, GWLP_USERDATA);
+          if (instance && instance->backbuffer_valid)
+               return 1;
           break;
 
 
@@ -839,16 +965,19 @@ static void dxrgb_draw_frame (dx_instance_t * _instance,
 
      check_events (instance);
 
-     hdc = GetDC(instance->window);
-     if (!hdc)
+     if (!ensure_backbuffer(instance))
           return;
-     FillRect(hdc, &((RECT) {0, 0, instance->client_width,
-                             instance->client_height}),
+     instance->backbuffer_ready = 0;
+     instance->backbuffer_valid = 0;
+     FillRect(instance->backbuffer_dc,
+              &((RECT) {0, 0, instance->client_width,
+                        instance->client_height}),
               (HBRUSH)GetStockObject(BLACK_BRUSH));
 
      if (instance->timeline_rect.right > instance->timeline_rect.left &&
-               instance->timeline_rect.bottom > instance->timeline_rect.top)
-          StretchDIBits(hdc,
+               instance->timeline_rect.bottom > instance->timeline_rect.top) {
+          SetStretchBltMode(instance->backbuffer_dc, COLORONCOLOR);
+          StretchDIBits(instance->backbuffer_dc,
                         instance->timeline_rect.left,
                         instance->timeline_rect.top,
                         instance->timeline_rect.right -
@@ -859,15 +988,16 @@ static void dxrgb_draw_frame (dx_instance_t * _instance,
                         instance->width, TIMELINE_HEIGHT,
                         *buf, (LPBITMAPINFO)lpbirgb,
                         DIB_RGB_COLORS, SRCCOPY);
+     }
 
      if (instance->video_rect.right > instance->video_rect.left &&
                instance->video_rect.bottom > instance->video_rect.top &&
                instance->width > 0 &&
                instance->height > TIMELINE_HEIGHT) {
-          SetStretchBltMode(hdc, HALFTONE);
-          SetBrushOrgEx(hdc, instance->video_rect.left,
+          SetStretchBltMode(instance->backbuffer_dc, HALFTONE);
+          SetBrushOrgEx(instance->backbuffer_dc, instance->video_rect.left,
                         instance->video_rect.top, NULL);
-          StretchDIBits(hdc,
+          StretchDIBits(instance->backbuffer_dc,
                         instance->video_rect.left,
                         instance->video_rect.top,
                         instance->video_rect.right - instance->video_rect.left,
@@ -877,7 +1007,7 @@ static void dxrgb_draw_frame (dx_instance_t * _instance,
                         *buf, (LPBITMAPINFO)lpbirgb,
                         DIB_RGB_COLORS, SRCCOPY);
      }
-     ReleaseDC(instance->window, hdc);
+     instance->backbuffer_ready = 1;
 
      return;
 
@@ -1003,6 +1133,8 @@ static void dx_close (dx_instance_t * _instance)
 
      instance = (dx_instance_t *) _instance;
 
+     destroy_backbuffer(instance);
+
      if (instance->overlay) {
           IDirectDrawSurface2_Release (instance->overlay);
           instance->overlay = NULL;
@@ -1114,6 +1246,12 @@ void vo_refresh()
           check_events (instance);
 }
 
+void vo_present()
+{
+     if (instance)
+          present_backbuffer(instance);
+}
+
 void vo_wait()
 {
      if (instance)
@@ -1136,15 +1274,15 @@ void ShowDetails(char *t)
      int l;
      int y;
 
-     if (!instance || !instance->window)
+     if (!instance || !instance->backbuffer_dc ||
+               !instance->backbuffer_ready)
           return;
 
-     text_dc = GetDC(instance->window);
-     if (!text_dc)
-          return;
+     text_dc = instance->backbuffer_dc;
 
      l = strlen(t);
      y = instance->timeline_rect.bottom;
+     SetBkMode(text_dc, OPAQUE);
      SetBkColor(text_dc, RGB(255, 255, 255));
      SetTextColor(text_dc, RGB(0, 0, 0));
      TextOut(text_dc, 0, y, t, l);
@@ -1152,7 +1290,6 @@ void ShowDetails(char *t)
           TextOut(text_dc, 0, y + DETAIL_HEIGHT, "Press F1 for help", 17);
           firstTime = 0;
      }
-     ReleaseDC(instance->window, text_dc);
 }
 
 void ShowHelp(char **ta)
@@ -1162,13 +1299,13 @@ void ShowHelp(char **ta)
      int l;
      int i = 0;
 
-     if (!instance || !instance->window)
+     if (!instance || !instance->backbuffer_dc ||
+               !instance->backbuffer_ready)
           return;
 
-     text_dc = GetDC(instance->window);
-     if (!text_dc)
-          return;
+     text_dc = instance->backbuffer_dc;
 
+     SetBkMode(text_dc, OPAQUE);
      SetBkColor(text_dc, RGB(255, 255, 255));
      SetTextColor(text_dc, RGB(0, 0, 0));
      while ((t = *ta)) {
@@ -1177,7 +1314,6 @@ void ShowHelp(char **ta)
                   instance->timeline_rect.bottom + DETAIL_HEIGHT * i++, t, l);
           ta++;
      }
-     ReleaseDC(instance->window, text_dc);
 }
 
 

@@ -267,6 +267,10 @@ void vo_draw(unsigned char * buf)
   SDL_RenderPresent(sdl->renderer);
 }
 
+void vo_present()
+{
+}
+
 void vo_refresh()
 {
   if (!instance) return;

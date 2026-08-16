@@ -3,6 +3,7 @@
 void vo_init(int width, int height, char *title);
 int vo_get_timeline_rect(int *left, int *top, int *right, int *bottom);
 void vo_draw(unsigned char * buf);
+void vo_present();
 void vo_refresh();
 void vo_wait();
 void vo_close();
