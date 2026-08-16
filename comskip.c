@@ -2049,11 +2049,55 @@ int show_silence=0;
 int preMarkerFrame = 0;
 int postMarkerFrame = 0;
 
+static int TimelineFrameToX(int frame, int visible_start,
+                            int visible_frames, int pixel_count)
+{
+    int64_t visible_end;
+
+    if (pixel_count <= 1 || visible_frames <= 1)
+        return 0;
+    visible_end = (int64_t)visible_start + visible_frames - 1;
+    if (frame <= visible_start)
+        return 0;
+    if ((int64_t)frame >= visible_end)
+        return pixel_count - 1;
+    return (int)(((int64_t)(frame - visible_start) *
+                  (pixel_count - 1)) / (visible_frames - 1));
+}
+
+static int TimelineXToFrame(int x, int visible_start,
+                            int visible_frames, int pixel_count)
+{
+    if (pixel_count <= 1 || visible_frames <= 1)
+        return visible_start;
+    x = max(0, min(x, pixel_count - 1));
+    return visible_start +
+           (int)(((int64_t)x * (visible_frames - 1)) /
+                 (pixel_count - 1));
+}
+
+static void TimelinePixelFrameRange(int x, int visible_start,
+                                    int visible_frames, int pixel_count,
+                                    int *pixel_start, int *pixel_end)
+{
+    *pixel_start = TimelineXToFrame(x, visible_start, visible_frames,
+                                    pixel_count);
+    if (x >= pixel_count - 1)
+        *pixel_end = visible_start + visible_frames - 1;
+    else
+        *pixel_end = TimelineXToFrame(x + 1, visible_start, visible_frames,
+                                      pixel_count) - 1;
+    if (*pixel_end < *pixel_start)
+        *pixel_end = *pixel_start;
+}
+
 void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
 {
 #if defined(_WIN32) || defined(HAVE_SDL)
     int i,j,x,y,a=0,c=0,r,s=0,g,gc,lb=0,e=0,n=0,bl,xd;
     int v,w;
+    int timeline_start, timeline_end, timeline_frames;
+    int timeline_client_width;
     int bartop = 0;
     int b,cb;
     int barh = 32;
@@ -2136,7 +2180,21 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
         if (zstart + v > frame_count) zstart = frame_count - v;
 //		if ( frm > v + zstart) zstart = frm - v;
 
-        w = ((frm - zstart)* owidth / v);
+        timeline_start = max(zstart, 1);
+        timeline_end = min(zstart + v - 1, frame_count - 1);
+        if (timeline_end < timeline_start)
+            timeline_end = timeline_start;
+        timeline_frames = timeline_end - timeline_start + 1;
+        w = TimelineFrameToX(frm, timeline_start, timeline_frames, owidth);
+        timeline_client_width = owidth;
+#ifdef _WIN32
+        {
+            int client_left, client_top, client_right, client_bottom;
+            if (vo_get_timeline_rect(&client_left, &client_top,
+                                     &client_right, &client_bottom))
+                timeline_client_width = client_right - client_left;
+        }
+#endif
 
 
 
@@ -2414,6 +2472,11 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
 //		if (0)	// disable debug bar
         for (x=0 ; x < owidth; x++)  				// debug bar
         {
+            int pixelFrameStart, pixelFrameEnd;
+
+            TimelinePixelFrameRange(x, timeline_start, timeline_frames,
+                                    owidth, &pixelFrameStart,
+                                    &pixelFrameEnd);
             blackframe = false;
             uniformframe = false;
             silence = 0;
@@ -2483,8 +2546,8 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
             {
                 for (i = 0; i <= commercial_count; i++)  	// Inside commercial?
                 {
-                    if (zstart+(int)((double)x * v /owidth ) >= commercial[i].start_frame &&
-                            zstart+(int)((double)x * v /owidth ) <= commercial[i].end_frame )
+                    if (pixelFrameStart <= commercial[i].end_frame &&
+                            pixelFrameEnd >= commercial[i].start_frame)
                     {
                         c = 128;
                         break;
@@ -2496,8 +2559,8 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
             {
                 for (i = 0; i < block_count; i++)
                 {
-                    if (zstart+(int)((double)x * v /owidth ) >= cblock[i].f_start &&
-                            zstart+(int)((double)x * v /owidth ) <= cblock[i].f_end &&
+                    if (pixelFrameStart <= cblock[i].f_end &&
+                            pixelFrameEnd >= cblock[i].f_start &&
                             cblock[i].score > global_threshold )
                     {
                         c = 220;
@@ -2510,8 +2573,8 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
             r = 255;
             for (i = 0; i <= reffer_count; i++)  		// Inside reference?
             {
-                if (zstart+(int)((double)x * v /owidth ) >= reffer[i].start_frame &&
-                        zstart+(int)((double)x * v /owidth ) <= reffer[i].end_frame )
+                if (pixelFrameStart <= reffer[i].end_frame &&
+                        pixelFrameEnd >= reffer[i].start_frame)
                 {
                     r = 0;
                     break;
@@ -2532,8 +2595,8 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
             g = 5; // Disable goodEdge graph
             for (i = 0; i < block_count; i++)
             {
-                if (zstart+(int)((double)x * v /owidth ) >= cblock[i].f_start &&
-                        zstart+(int)((double)x * v /owidth ) <= cblock[i].f_end &&
+                if (pixelFrameStart <= cblock[i].f_end &&
+                        pixelFrameEnd >= cblock[i].f_start &&
                         cblock[i].correlation > 0 )  					// if inside a correlated cblock
                 {
                     g=2;
@@ -2549,7 +2612,8 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
             }
 
             cb = 255;
-            if (block_count && cblock[b].f_start <= zstart+(int)((double)x * v /owidth ) && zstart+(int)((double)x * v /owidth ) <= cblock[b].f_end)
+            if (block_count && cblock[b].f_start <= pixelFrameEnd &&
+                    pixelFrameStart <= cblock[b].f_end)
                 cb = 0;
 
             if (bothtrue)
@@ -2594,21 +2658,6 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
                 else
                     PIXEL(x,y) = 255;
             }
-            if (w < owidth)									// Progress indicator
-                for (y = bartop; y < bartop+30 ; y++) SETPIXEL(w,y,255,0,0);
-
-            if (preMarkerFrame > 0)
-            {
-                int showMkrX = ((preMarkerFrame - zstart)* owidth / v);
-                for (y = bartop; y < bartop+30 ; y++) SETPIXEL(showMkrX,y,0,255,0);
-            }
-
-            if (postMarkerFrame > 0)
-            {
-                int comMkrX = ((postMarkerFrame - zstart)* owidth / v);
-                for (y = bartop; y < bartop+30 ; y++) SETPIXEL(comMkrX,y,0,0,255);
-            }
-
             for (y = bartop; y < bartop+(loadingTXT?20:5) ; y++)
             {
                 // Reference bar
@@ -2620,6 +2669,42 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
             }
         }
 
+        /* A source column can disappear when the timeline is downscaled.
+         * For a reference block narrower than one client pixel, cover the
+         * complete source footprint of that single client pixel. */
+        if (reffer_count >= 0 && timeline_client_width > 0 &&
+                timeline_client_width < owidth)
+        {
+            for (i = 0; i <= reffer_count; i++)
+            {
+                int block_start, block_end, client_x, source_start, source_end;
+                if (reffer[i].end_frame <= reffer[i].start_frame ||
+                        reffer[i].end_frame < timeline_start ||
+                        reffer[i].start_frame > timeline_end)
+                    continue;
+                block_start = max(reffer[i].start_frame, timeline_start);
+                block_end = min(reffer[i].end_frame, timeline_end);
+                client_x = TimelineFrameToX(block_start, timeline_start,
+                                             timeline_frames,
+                                             timeline_client_width);
+                if (client_x != TimelineFrameToX(block_end, timeline_start,
+                                                  timeline_frames,
+                                                  timeline_client_width))
+                    continue;
+                source_start = (int)(((int64_t)client_x * owidth) /
+                                     timeline_client_width);
+                source_end = (int)((((int64_t)(client_x + 1) * owidth) +
+                                    timeline_client_width - 1) /
+                                   timeline_client_width) - 1;
+                source_start = max(0, min(source_start, owidth - 1));
+                source_end = max(source_start, min(source_end, owidth - 1));
+                for (x = source_start; x <= source_end; x++)
+                    for (y = bartop;
+                            y < bartop + (loadingTXT ? 20 : 5); y++)
+                        PIXEL(x,y) = 0;
+            }
+        }
+
         if (loadingTXT && reffer_count >= 0 && v > 0)
         {
             for (i = 0; i <= reffer_count; i++)
@@ -2628,13 +2713,35 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
                         reffer[i].start_frame >= zstart &&
                         reffer[i].start_frame < zstart + v)
                 {
-                    x = (int)((double)(reffer[i].start_frame - zstart) *
-                              owidth / v);
+                    x = TimelineFrameToX(reffer[i].start_frame,
+                                         timeline_start, timeline_frames,
+                                         owidth);
                     for (j = max(0, x - 1); j <= min(owidth - 1, x + 1); j++)
                         for (y = bartop; y < bartop + 20; y++)
                             SETPIXEL(j,y,255,128,0);
                 }
             }
+        }
+
+
+        /* Draw all navigation markers last so no timeline bar can cover them. */
+        w = max(0, min(w, owidth - 1));
+        for (y = bartop; y < bartop+30 ; y++) SETPIXEL(w,y,255,0,0);
+
+        if (preMarkerFrame > 0)
+        {
+            int showMkrX = TimelineFrameToX(preMarkerFrame, timeline_start,
+                                            timeline_frames, owidth);
+            showMkrX = max(0, min(showMkrX, owidth - 1));
+            for (y = bartop; y < bartop+30 ; y++) SETPIXEL(showMkrX,y,0,255,0);
+        }
+
+        if (postMarkerFrame > 0)
+        {
+            int comMkrX = TimelineFrameToX(postMarkerFrame, timeline_start,
+                                           timeline_frames, owidth);
+            comMkrX = max(0, min(comMkrX, owidth - 1));
+            for (y = bartop; y < bartop+30 ; y++) SETPIXEL(comMkrX,y,0,0,255);
         }
         vo_draw(graph);
 
@@ -3447,12 +3554,17 @@ bool ReviewResult()
                     zfactor > 0)
             {
                 int visible_frames = frame_count / zfactor;
+                int visible_start = max(zstart, 1);
+                int visible_end = min(zstart + visible_frames - 1,
+                                      frame_count - 1);
                 int timeline_x = max(timeline_left,
                                      min(xPos, timeline_right - 1));
-                curframe = zstart +
-                           (int)((double)visible_frames *
-                                 (timeline_x - timeline_left) /
-                                 (timeline_right - timeline_left)) + 1;
+                if (visible_end < visible_start)
+                    visible_end = visible_start;
+                curframe = TimelineXToFrame(timeline_x - timeline_left,
+                                            visible_start,
+                                            visible_end - visible_start + 1,
+                                            timeline_right - timeline_left);
             }
             lMouseDown = 0;
         }

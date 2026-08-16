@@ -305,6 +305,7 @@ static void update_overlay (dx_instance_t * instance)
 }
 
 #define TIMELINE_HEIGHT 32
+#define TIMELINE_HORIZONTAL_INSET 2
 #define DETAIL_HEIGHT 16
 #define MIN_VIDEO_DISPLAY_SIZE 16
 
@@ -315,6 +316,7 @@ static void update_layout (dx_instance_t * instance)
      int available_width;
      int available_height;
      int content_top;
+     int timeline_inset;
      int video_width;
      int video_height;
      double scale;
@@ -322,9 +324,11 @@ static void update_layout (dx_instance_t * instance)
      if (!instance)
           return;
 
-     instance->timeline_rect.left = 0;
+     timeline_inset = min(TIMELINE_HORIZONTAL_INSET,
+                          max(0, (instance->client_width - 1) / 2));
+     instance->timeline_rect.left = timeline_inset;
      instance->timeline_rect.top = 0;
-     instance->timeline_rect.right = instance->client_width;
+     instance->timeline_rect.right = instance->client_width - timeline_inset;
      instance->timeline_rect.bottom = min(TIMELINE_HEIGHT,
                                            instance->client_height);
      SetRectEmpty(&instance->video_rect);
