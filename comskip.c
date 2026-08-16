@@ -2142,7 +2142,7 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
 
         if (showVideo && frame_ptr)
         {
-            memset(graph, 0, owidth*oheight*3);
+            memset(graph, 0, owidth*(oheight+barh)*3);
             /*
             			for (x = 0; x < border; x++) {
             				for (y = 0; y < oheight; y++) {
@@ -2264,7 +2264,7 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
         }
         else
         {
-            memset(graph, 0, owidth*oheight*3);
+            memset(graph, 0, owidth*(oheight+barh)*3);
 
         }
 
