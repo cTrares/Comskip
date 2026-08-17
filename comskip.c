@@ -33,6 +33,7 @@
 #endif
 
 #include "comskip.h"
+#include "review_navigation.h"
 
 
 // Define detection methods
@@ -500,6 +501,45 @@ char					inifilename[MAX_PATH];
 char					dictfilename[MAX_PATH];
 char					out_filename[MAX_PATH];
 char					incommercial_filename[MAX_PATH];
+char                    hybrid_logo_sidecar_filename[MAX_PATH];
+
+typedef struct
+{
+    bool valid;
+    long observation_count;
+    double first_time_seconds;
+    double last_time_seconds;
+    double load_seconds;
+} hybrid_logo_sidecar_info;
+
+hybrid_logo_sidecar_info hybrid_logo_sidecar = { false, 0, 0.0, 0.0, 0.0 };
+
+typedef struct
+{
+    double time_seconds;
+    char fusion_state;
+    char comskip_state;
+    char logofinder_state;
+} hybrid_logo_observation;
+
+typedef struct
+{
+    double present;
+    double absent;
+    double conflict;
+    double unknown;
+    double comskip_present;
+    double logofinder_present;
+} hybrid_logo_fractions;
+
+hybrid_logo_observation *hybrid_logo_observations = NULL;
+long hybrid_logo_observation_capacity = 0;
+bool output_hybrid_logo_shadow = false;
+bool hybrid_logo_experimental = false;
+bool multiwindow_logo_experimental = false;
+bool disable_excessive_length_penalty = false;
+double hybrid_shadow_normal_logo_modifier[MAX_BLOCKS];
+char hybrid_shadow_normal_logo_state[MAX_BLOCKS];
 
 char					outputdirname[MAX_PATH];
 char					filename[MAX_PATH];
@@ -686,6 +726,7 @@ bool				output_ffsplit = false;
 int					noise_level=5;
 bool				framearray = true;
 bool				output_framearray = false;
+bool				output_logo_raw = false;
 bool				only_strict = false;
 double				length_strict_modifier = 3.0;
 double				length_nonstrict_modifier = 1.5;
@@ -982,6 +1023,15 @@ void				OutputHistogram(int *histogram, int scale, char *title, bool truncate);
 int					FindBlackThreshold(double percentile);
 int					FindUniformThreshold(double percentile);
 void				OutputFrameArray(bool screenOnly);
+void				OutputLogoRaw(void);
+bool                LoadHybridLogoSidecar(const char *sidecar_filename);
+void                OutputHybridLogoShadow(void);
+void                OutputHybridLogoExperimental(void);
+bool                HybridLogoExperimentalActive(void);
+bool                LogoGlobalReliabilityOnly(void);
+void                CalculateHybridLogoFractions(int start, int end, hybrid_logo_fractions *fractions);
+char                HybridLogoEvidence(int start, int end, hybrid_logo_fractions *fractions);
+double              CalculateLegacyLogoFraction(int start, int end);
 void                OutputBlackArray();
 void				OutputFrame(int frame_number);
 void				OpenOutputFiles();
@@ -3120,11 +3170,9 @@ bool ReviewResult()
             }
             if (key == 37) curframe -= 1;
             if (key == 39) curframe += 1;
-            if (key == 38) curframe += (int)fps;
-            if (key == 40) curframe -= (int)fps;
-            if (key == 33) curframe -= (int)(20*fps);
+            if (key == 38 || key == 40 || key == 33 || key == 34)
+                curframe = ReviewNavigateVertical(curframe, key, fps, frame_count);
             if (key == 133) curframe -= (int)(.5*fps);
-            if (key == 34) curframe += (int)(20*fps);
             if (key == 134) curframe += (int)(.5*fps);
 
             if (key == 'M' || (key == 39 && shift))   // Next commercial boundary
@@ -4601,7 +4649,8 @@ scanagain:
 //			reverseLogoLogic = true;
 //			logoPercentage = 1 - logoPercentage;
 //		}
-        if (logoPercentage < logo_fraction - 0.05 || logoPercentage > logo_percentile)
+        if (!LogoGlobalReliabilityOnly() &&
+                (logoPercentage < logo_fraction - 0.05 || logoPercentage > logo_percentile))
         {
             Debug(1, "\nNot enough or too much logo's found (%.2f), disabling the use of Logo detection\n",logoPercentage );
             commDetectMethod -= LOGO;
@@ -4989,6 +5038,7 @@ again:
     }
 
     if (output_framearray) OutputFrameArray(false);
+    if (output_logo_raw) OutputLogoRaw();
     if (output_framearray) OutputBlackArray();
 
     BuildBlocks(false);
@@ -5258,7 +5308,8 @@ void WeighBlocks(void)
 
     if (commDetectMethod & LOGO)
     {
-        if (logoPercentage < logo_fraction - 0.05 || logoPercentage > logo_percentile)
+        if (!LogoGlobalReliabilityOnly() &&
+                (logoPercentage < logo_fraction - 0.05 || logoPercentage > logo_percentile))
         {
             Debug(1, "Not enough or too much logo's found, disabling the use of Logo detection\n", i);
             commDetectMethod -= LOGO;
@@ -5312,7 +5363,11 @@ void WeighBlocks(void)
 
     Debug(5, "\nFuzzy scoring of the blocks\n---------------------------\n");
 
-
+    for (i = 0; i < block_count; i++)
+    {
+        hybrid_shadow_normal_logo_modifier[i] = 1.0;
+        hybrid_shadow_normal_logo_state[i] = 'N';
+    }
 
     for (i = 0; i < block_count; i++)
     {
@@ -5596,6 +5651,8 @@ void WeighBlocks(void)
                 Debug(2, "Block %i has logo.\n", i);
                 Debug(3, "Block %i score:\tBefore - %.2f\t", i, cblock[i].score);
                 cblock[i].score *= logo_present_modifier;
+                hybrid_shadow_normal_logo_modifier[i] = logo_present_modifier;
+                hybrid_shadow_normal_logo_state[i] = 'P';
 //				cblock[i].score *= (logo_present_modifier*cblock[i].logo) + (1-cblock[i].logo);
                 cblock[i].score = (cblock[i].score > max_score) ? max_score : cblock[i].score;
                 Debug(3, "After - %.2f\n", cblock[i].score);
@@ -5612,11 +5669,14 @@ void WeighBlocks(void)
             				cblock[i].cause |= C_LOGO;
             				cblock[i].less |= C_LOGO;
             			}
-            */			else if (punish_no_logo && cblock[i].logo < logo_percentage_threshold && logoPercentage > logo_fraction)
+            */			else if (punish_no_logo && cblock[i].logo < logo_percentage_threshold &&
+                                   (HybridLogoExperimentalActive() || logoPercentage > logo_fraction))
             {
                 Debug(2, "Block %i has no logo.\n", i);
                 Debug(3, "Block %i score:\tBefore - %.2f\t", i, cblock[i].score);
                 cblock[i].score *= 2;
+                hybrid_shadow_normal_logo_modifier[i] = 2.0;
+                hybrid_shadow_normal_logo_state[i] = 'A';
                 cblock[i].score = (cblock[i].score > max_score) ? max_score : cblock[i].score;
                 Debug(3, "After - %.2f\n", cblock[i].score);
                 cblock[i].cause |= C_LOGO;
@@ -5757,7 +5817,7 @@ void WeighBlocks(void)
         }
 #endif
         // if length > max_commercial_size * fps, score = 10%
-        if (cblock[i].length > 2 * min_show_segment_length)
+        if (!disable_excessive_length_penalty && cblock[i].length > 2 * min_show_segment_length)
         {
             Debug(2, "Block %i has twice excess length.\n", i);
             Debug(3, "Block %i score:\tBefore - %.2f\t", i, cblock[i].score);
@@ -5769,7 +5829,7 @@ void WeighBlocks(void)
         }
         else
 
-            if (cblock[i].length > min_show_segment_length)
+            if (!disable_excessive_length_penalty && cblock[i].length > min_show_segment_length)
             {
                 Debug(2, "Block %i has excess length.\n", i);
                 Debug(3, "Block %i score:\tBefore - %.2f\t", i, cblock[i].score);
@@ -7650,6 +7710,10 @@ bool OutputBlocks(void)
     Debug(1, "\tAfter rounding - %.4f\n", threshold);
 
     BuildCommercial();
+    if (HybridLogoExperimentalActive())
+        OutputHybridLogoExperimental();
+    if (output_hybrid_logo_shadow && hybrid_logo_sidecar.valid)
+        OutputHybridLogoShadow();
 
 #ifdef undef
     commercial_count = -1;
@@ -9046,6 +9110,7 @@ void LoadIniFile()
         if ((tmp = FindNumber(data, "output_dvrcut=", (double) output_dvrcut)) > -1) output_dvrcut = (bool) tmp;
         if ((tmp = FindNumber(data, "output_ipodchap=", (double) output_ipodchap)) > -1) output_ipodchap = (bool) tmp;
         if ((tmp = FindNumber(data, "output_framearray=", (double) output_framearray)) > -1) output_framearray = (bool) tmp;
+        if ((tmp = FindNumber(data, "output_logo_raw=", (double) output_logo_raw)) > -1) output_logo_raw = (bool) tmp;
         if ((tmp = FindNumber(data, "output_debugwindow=", (double) output_debugwindow)) > -1) output_debugwindow = (bool) tmp;
         if ((tmp = FindNumber(data, "output_tuning=", (double) output_tuning)) > -1) output_tuning = (bool) tmp;
         if ((tmp = FindNumber(data, "output_training=", (double) output_training)) > -1) output_training = (bool) tmp;
@@ -9125,6 +9190,11 @@ FILE* LoadSettings(int argc, char ** argv)
     struct arg_lit*		cl_output_vredo			= arg_lit0(NULL, "videoredo", "Outputs a VideoRedo cutlist");
     struct arg_lit*		cl_output_vredo3		= arg_lit0(NULL, "videoredo3", "Outputs a VideoRedo3 cutlist");
     struct arg_lit*		cl_output_csv			= arg_lit0(NULL, "csvout", "Outputs a csv of the frame array");
+    struct arg_lit*		cl_output_logo_raw		= arg_lit0(NULL, "logo-raw", "Outputs the experimental raw logo timeline CSV");
+    struct arg_lit*      cl_output_hybrid_logo_shadow = arg_lit0(NULL, "hybrid-logo-shadow", "Outputs experimental hybrid logo shadow scores (requires --hybrid-logo-sidecar)");
+    struct arg_lit*      cl_hybrid_logo_experimental = arg_lit0(NULL, "hybrid-logo-experimental", "Use hybrid logo evidence in normal commercial processing");
+    struct arg_lit*      cl_multiwindow_logo_experimental = arg_lit0(NULL, "multiwindow-logo-experimental", "Use a preselected recurring multiwindow Comskip logo mask; global logo percentage is reliability only");
+    struct arg_lit*      cl_disable_excessive_length_penalty = arg_lit0(NULL, "disable-excessive-length-penalty", "Disable only the >min_show_segment_length and >2*min_show_segment_length score penalties");
     struct arg_lit*		cl_output_training		= arg_lit0(NULL, "quality", "Outputs a csv of false detection segments");
     struct arg_lit*		cl_output_plist	= arg_lit0(NULL, "plist", "Outputs a mac-style plist for addition to an EyeTV archive as the 'markers' property");
     struct arg_int*		cl_detectmethod			= arg_intn("d", "detectmethod", NULL, 0, 1, "An integer sum of the detection methods to use");
@@ -9151,6 +9221,7 @@ FILE* LoadSettings(int argc, char ** argv)
     struct arg_file*	cl_cut					= arg_filen(NULL, "cut", NULL, 0, 1, "CutScene file to use");
     struct arg_file*	cl_work					= arg_filen(NULL, "output", NULL, 0, 1, "Folder to use for all output files");
     struct arg_file*	cl_work_fname		= arg_filen(NULL, "output-filename", NULL, 0, 1, "Filename base to use for all output files");
+    struct arg_file*    cl_hybrid_logo_sidecar = arg_filen(NULL, "hybrid-logo-sidecar", NULL, 0, 1, "Validate an experimental hybrid-logo-v1 JSONL sidecar");
     struct arg_int*	cl_selftest					= arg_intn(NULL, "selftest", NULL, 0, 1, "Execute a selftest");
     struct arg_file*	in						= arg_filen(NULL, NULL, NULL, 1, 1, "Input file");
     struct arg_file*	out						= arg_filen(NULL, NULL, NULL, 0, 1, "Output folder for cutlist");
@@ -9166,6 +9237,11 @@ FILE* LoadSettings(int argc, char ** argv)
         cl_output_vredo,
         cl_output_vredo3,
         cl_output_csv,
+        cl_output_logo_raw,
+        cl_output_hybrid_logo_shadow,
+        cl_hybrid_logo_experimental,
+        cl_multiwindow_logo_experimental,
+        cl_disable_excessive_length_penalty,
         cl_output_training,
         cl_output_plist,
         cl_demux,
@@ -9189,6 +9265,7 @@ FILE* LoadSettings(int argc, char ** argv)
         cl_cut,
         cl_work,
         cl_work_fname,
+        cl_hybrid_logo_sidecar,
         cl_selftest,
         in,
         out,
@@ -9602,6 +9679,15 @@ FILE* LoadSettings(int argc, char ** argv)
         output_console = false;
     }
 
+    if (cl_hybrid_logo_sidecar->count)
+    {
+        snprintf(hybrid_logo_sidecar_filename, sizeof(hybrid_logo_sidecar_filename), "%s", cl_hybrid_logo_sidecar->filename[0]);
+        if (!LoadHybridLogoSidecar(hybrid_logo_sidecar_filename))
+        {
+            printf("Hybrid logo sidecar is invalid or unavailable; continuing without it.\n");
+        }
+    }
+
 
 #ifdef COMSKIPGUI
 //		output_debugwindow = true;
@@ -9660,6 +9746,68 @@ FILE* LoadSettings(int argc, char ** argv)
     if (cl_output_csv->count)
     {
         output_framearray = true;
+    }
+
+    if (cl_output_logo_raw->count)
+    {
+        output_logo_raw = true;
+    }
+
+    if (cl_output_hybrid_logo_shadow->count)
+    {
+        output_hybrid_logo_shadow = true;
+        if (!hybrid_logo_sidecar.valid)
+            printf("Hybrid logo shadow output disabled because no valid sidecar was loaded.\n");
+    }
+
+    if (cl_hybrid_logo_experimental->count)
+    {
+        if (hybrid_logo_sidecar.valid)
+        {
+            hybrid_logo_experimental = true;
+            commDetectMethod |= LOGO;
+            printf("Experimental hybrid logo mode enabled; normal outputs will use hybrid logo evidence.\n");
+        }
+        else
+        {
+            printf("Experimental hybrid logo mode requires a valid sidecar; continuing with baseline behavior.\n");
+        }
+    }
+
+    if (cl_multiwindow_logo_experimental->count)
+    {
+        if (cl_logo->count)
+        {
+            multiwindow_logo_experimental = true;
+            commDetectMethod |= LOGO;
+            printf("Experimental multiwindow logo mode enabled; the supplied recurring mask remains active regardless of global logo percentage.\n");
+        }
+        else
+        {
+            printf("Experimental multiwindow logo mode requires a preselected --logo mask; continuing with baseline behavior.\n");
+        }
+    }
+
+    if (cl_disable_excessive_length_penalty->count)
+    {
+        disable_excessive_length_penalty = true;
+        printf("Excessive-length score penalties disabled; min_show_segment_length itself is unchanged.\n");
+    }
+
+    /* The released final logo workflow supplies a recurring mask and the internal
+       sensor sidecar.  These inputs are sufficient to select the proven mode;
+       users and workflow launchers do not need experimental command switches. */
+    if (cl_logo->count)
+    {
+        multiwindow_logo_experimental = true;
+        commDetectMethod |= LOGO;
+    }
+    if (cl_logo->count && hybrid_logo_sidecar.valid)
+    {
+        hybrid_logo_experimental = true;
+        disable_excessive_length_penalty = true;
+        commDetectMethod |= LOGO;
+        printf("Final recurring-mask and internal-logo-sensor mode enabled.\n");
     }
 
     if (cl_output_training->count)
@@ -9728,6 +9876,10 @@ FILE* LoadSettings(int argc, char ** argv)
         commDetectMethod = cl_detectmethod->ival[0];
         printf("Setting detection methods to %i as per command line.\n", commDetectMethod);
     }
+    if (hybrid_logo_experimental)
+        commDetectMethod |= LOGO;
+    if (multiwindow_logo_experimental)
+        commDetectMethod |= LOGO;
 
     if (cl_dump->count)
     {
@@ -12393,7 +12545,8 @@ bool SearchForLogoEdges(void)
         currentGoodEdge = 0.0;
     }
 
-    if (!logoInfoAvailable && startOverAfterLogoInfoAvail && (framenum_real > (int)(giveUpOnLogoSearch * fps)))
+    if (!LogoGlobalReliabilityOnly() && !logoInfoAvailable && startOverAfterLogoInfoAvail &&
+            (framenum_real > (int)(giveUpOnLogoSearch * fps)))
     {
         Debug(1, "No logo was found after %i frames.\nGiving up", framenum_real);
         commDetectMethod -= LOGO;
@@ -12621,9 +12774,82 @@ void DumpEdgeMasks(void)
     }
 }
 
+bool HybridLogoExperimentalActive(void)
+{
+    return hybrid_logo_experimental && hybrid_logo_sidecar.valid && hybrid_logo_observations != NULL;
+}
+
+bool LogoGlobalReliabilityOnly(void)
+{
+    return multiwindow_logo_experimental || HybridLogoExperimentalActive();
+}
+
+void CalculateHybridLogoFractions(int start, int end, hybrid_logo_fractions *fractions)
+{
+    long j;
+    double range_start = F2T(start);
+    double range_end = F2T(end);
+    double duration = range_end - range_start;
+    double covered = 0.0;
+    memset(fractions, 0, sizeof(*fractions));
+    if (!HybridLogoExperimentalActive() || duration <= 0.0)
+    {
+        fractions->unknown = 1.0;
+        return;
+    }
+    for (j = 0; j < hybrid_logo_sidecar.observation_count; j++)
+    {
+        double segment_start = hybrid_logo_observations[j].time_seconds;
+        double segment_end = (j + 1 < hybrid_logo_sidecar.observation_count) ?
+                             hybrid_logo_observations[j + 1].time_seconds : range_end;
+        double overlap_start;
+        double overlap_end;
+        double overlap;
+        if (segment_end <= range_start)
+            continue;
+        if (segment_start >= range_end)
+            break;
+        overlap_start = segment_start > range_start ? segment_start : range_start;
+        overlap_end = segment_end < range_end ? segment_end : range_end;
+        overlap = overlap_end - overlap_start;
+        if (overlap <= 0.0)
+            continue;
+        covered += overlap;
+        if (hybrid_logo_observations[j].fusion_state == 'P') fractions->present += overlap;
+        else if (hybrid_logo_observations[j].fusion_state == 'A') fractions->absent += overlap;
+        else if (hybrid_logo_observations[j].fusion_state == 'C') fractions->conflict += overlap;
+        else fractions->unknown += overlap;
+        if (hybrid_logo_observations[j].comskip_state == 'P') fractions->comskip_present += overlap;
+        if (hybrid_logo_observations[j].logofinder_state == 'P') fractions->logofinder_present += overlap;
+    }
+    if (covered < duration)
+        fractions->unknown += duration - covered;
+    fractions->present /= duration;
+    fractions->absent /= duration;
+    fractions->conflict /= duration;
+    fractions->unknown /= duration;
+    fractions->comskip_present /= duration;
+    fractions->logofinder_present /= duration;
+}
+
+char HybridLogoEvidence(int start, int end, hybrid_logo_fractions *fractions)
+{
+    CalculateHybridLogoFractions(start, end, fractions);
+    if (fractions->present > logo_percentage_threshold)
+        return 'P';
+    if (fractions->absent > 1.0 - logo_percentage_threshold)
+        return 'A';
+    return 'N';
+}
+
 bool CheckFramesForLogo(int start, int end)
 {
     int		i;
+    if (HybridLogoExperimentalActive())
+    {
+        hybrid_logo_fractions fractions;
+        return HybridLogoEvidence(start, end, &fractions) == 'P';
+    }
 #ifdef OLD_LIVE_TV
     int		j;
     for (i = start; i <= end; i++)
@@ -12652,7 +12878,7 @@ bool CheckFramesForLogo(int start, int end)
 
 }
 
-double CalculateLogoFraction(int start, int end)
+double CalculateLegacyLogoFraction(int start, int end)
 {
     int		i,j;
     int		count=0;
@@ -12668,9 +12894,51 @@ double CalculateLogoFraction(int start, int end)
     return ((double) count / (double)(end - start + 1));
 }
 
+double CalculateLogoFraction(int start, int end)
+{
+    if (HybridLogoExperimentalActive())
+    {
+        hybrid_logo_fractions fractions;
+        char evidence = HybridLogoEvidence(start, end, &fractions);
+        if (evidence == 'P')
+            return 1.0;
+        if (evidence == 'A')
+            return 0.0;
+        return logo_percentage_threshold;
+    }
+    return CalculateLegacyLogoFraction(start, end);
+}
+
 bool CheckFrameForLogo(int i)
 {
-    int		j=0;
+	int		j=0;
+    if (HybridLogoExperimentalActive())
+    {
+        long low = 0;
+        long high = hybrid_logo_sidecar.observation_count;
+        double target = F2T(i);
+        long best;
+        while (low < high)
+        {
+            long middle = low + (high - low) / 2;
+            if (hybrid_logo_observations[middle].time_seconds < target)
+                low = middle + 1;
+            else
+                high = middle;
+        }
+        if (low == 0)
+            best = 0;
+        else if (low >= hybrid_logo_sidecar.observation_count)
+            best = hybrid_logo_sidecar.observation_count - 1;
+        else if (target - hybrid_logo_observations[low - 1].time_seconds <=
+                 hybrid_logo_observations[low].time_seconds - target)
+            best = low - 1;
+        else
+            best = low;
+        if (fabs(hybrid_logo_observations[best].time_seconds - target) > 0.1)
+            return false;
+        return hybrid_logo_observations[best].fusion_state == 'P';
+    }
     while (j < logo_block_count && i > logo_block[j].end) j++;
     if (j < logo_block_count && i <= logo_block[j].end && i >= logo_block[j].start )
     {
@@ -14276,6 +14544,350 @@ void OutputFrameArray(bool screenOnly)
     }
 
     fclose(raw);
+}
+
+void OutputLogoRaw(void)
+{
+    int i;
+    char array[MAX_PATH + 32];
+    FILE* raw;
+    int global_logo_enabled = ((commDetectMethod & LOGO) != 0);
+
+    sprintf(array, "%s.logo-raw.csv", workbasename);
+    raw = myfopen(array, "w");
+    if (!raw)
+    {
+        Debug(1, "Could not open experimental raw logo output file.\n");
+        return;
+    }
+
+    fprintf(raw,
+            "frame,time_seconds,comskip_good_edge,comskip_present,local_state_start,local_state_end,global_logo_percentage,global_logo_enabled\n");
+    for (i = 1; i < frame_count; i++)
+    {
+        int state_start = (i == 1 || frame[i].logo_present != frame[i - 1].logo_present);
+        int state_end = (i == frame_count - 1 || frame[i].logo_present != frame[i + 1].logo_present);
+        fprintf(raw, "%i,%.6f,%.9f,%i,%i,%i,%.9f,%i\n",
+                i,
+                frame[i].pts,
+                frame[i].currentGoodEdge,
+                frame[i].logo_present ? 1 : 0,
+                state_start,
+                state_end,
+                logoPercentage,
+                global_logo_enabled);
+    }
+    fclose(raw);
+    Debug(1, "Experimental raw logo timeline written to %s\n", array);
+}
+
+bool LoadHybridLogoSidecar(const char *sidecar_filename)
+{
+    FILE *sidecar_file;
+    static char line[16384];
+    char *time_value;
+    char *time_end;
+    double current_time;
+    double previous_time = -1.0;
+    long line_number = 0;
+    long observation_count = 0;
+    clock_t load_started = clock();
+
+    hybrid_logo_sidecar.valid = false;
+    hybrid_logo_sidecar.observation_count = 0;
+    free(hybrid_logo_observations);
+    hybrid_logo_observations = NULL;
+    hybrid_logo_observation_capacity = 0;
+    sidecar_file = myfopen(sidecar_filename, "r");
+    if (!sidecar_file)
+    {
+        printf("Could not open hybrid logo sidecar %s: %s\n", sidecar_filename, strerror(errno));
+        return false;
+    }
+
+    if (!fgets(line, sizeof(line), sidecar_file))
+    {
+        printf("Hybrid logo sidecar %s is empty.\n", sidecar_filename);
+        fclose(sidecar_file);
+        return false;
+    }
+    line_number++;
+    if (!strstr(line, "\"record_type\":\"metadata\"") ||
+            !strstr(line, "\"schema_version\":\"hybrid-logo-v1\"") ||
+            !strstr(line, "\"primary_axis\":\"time_seconds\""))
+    {
+        printf("Hybrid logo sidecar %s has an incompatible metadata header.\n", sidecar_filename);
+        fclose(sidecar_file);
+        return false;
+    }
+
+    while (fgets(line, sizeof(line), sidecar_file))
+    {
+        line_number++;
+        if (!strchr(line, '\n') && !feof(sidecar_file))
+        {
+            printf("Hybrid logo sidecar line %ld exceeds the supported line length.\n", line_number);
+            fclose(sidecar_file);
+            return false;
+        }
+        if (!strstr(line, "\"record_type\":\"observation\"") ||
+                !strstr(line, "\"schema_version\":\"hybrid-logo-v1\"") ||
+                !strstr(line, "\"comskip_local_state\":") ||
+                !strstr(line, "\"comskip_local_confidence\":") ||
+                !strstr(line, "\"comskip_global_reliability\":") ||
+                !strstr(line, "\"logofinder_raw_score\":") ||
+                !strstr(line, "\"logofinder_stabilized_state\":") ||
+                !strstr(line, "\"logofinder_local_confidence\":") ||
+                !strstr(line, "\"logofinder_global_reliability\":") ||
+                !strstr(line, "\"fusion_state\":") ||
+                !strstr(line, "\"fusion_reason\":"))
+        {
+            printf("Hybrid logo sidecar line %ld is missing required fields.\n", line_number);
+            fclose(sidecar_file);
+            return false;
+        }
+        if (!strstr(line, "\"fusion_state\":\"PRESENT\"") &&
+                !strstr(line, "\"fusion_state\":\"ABSENT\"") &&
+                !strstr(line, "\"fusion_state\":\"CONFLICT\"") &&
+                !strstr(line, "\"fusion_state\":\"UNKNOWN\""))
+        {
+            printf("Hybrid logo sidecar line %ld contains an invalid fusion state.\n", line_number);
+            fclose(sidecar_file);
+            return false;
+        }
+        time_value = strstr(line, "\"time_seconds\":");
+        if (!time_value)
+        {
+            printf("Hybrid logo sidecar line %ld has no primary timestamp.\n", line_number);
+            fclose(sidecar_file);
+            return false;
+        }
+        time_value += strlen("\"time_seconds\":");
+        current_time = strtod(time_value, &time_end);
+        if (time_end == time_value || current_time < 0.0 || current_time < previous_time)
+        {
+            printf("Hybrid logo sidecar line %ld has an invalid or non-monotonic timestamp.\n", line_number);
+            fclose(sidecar_file);
+            return false;
+        }
+        if (observation_count >= hybrid_logo_observation_capacity)
+        {
+            hybrid_logo_observation *resized;
+            hybrid_logo_observation_capacity += 4096;
+            resized = realloc(hybrid_logo_observations,
+                              hybrid_logo_observation_capacity * sizeof(*hybrid_logo_observations));
+            if (!resized)
+            {
+                printf("Could not allocate hybrid logo sidecar observations.\n");
+                free(hybrid_logo_observations);
+                hybrid_logo_observations = NULL;
+                hybrid_logo_observation_capacity = 0;
+                fclose(sidecar_file);
+                return false;
+            }
+            hybrid_logo_observations = resized;
+        }
+        hybrid_logo_observations[observation_count].time_seconds = current_time;
+        if (strstr(line, "\"fusion_state\":\"PRESENT\""))
+            hybrid_logo_observations[observation_count].fusion_state = 'P';
+        else if (strstr(line, "\"fusion_state\":\"ABSENT\""))
+            hybrid_logo_observations[observation_count].fusion_state = 'A';
+        else if (strstr(line, "\"fusion_state\":\"CONFLICT\""))
+            hybrid_logo_observations[observation_count].fusion_state = 'C';
+        else
+            hybrid_logo_observations[observation_count].fusion_state = 'U';
+        if (strstr(line, "\"comskip_local_state\":\"PRESENT\""))
+            hybrid_logo_observations[observation_count].comskip_state = 'P';
+        else if (strstr(line, "\"comskip_local_state\":\"ABSENT\""))
+            hybrid_logo_observations[observation_count].comskip_state = 'A';
+        else
+            hybrid_logo_observations[observation_count].comskip_state = 'U';
+        if (strstr(line, "\"logofinder_stabilized_state\":\"PRESENT\""))
+            hybrid_logo_observations[observation_count].logofinder_state = 'P';
+        else if (strstr(line, "\"logofinder_stabilized_state\":\"ABSENT\""))
+            hybrid_logo_observations[observation_count].logofinder_state = 'A';
+        else
+            hybrid_logo_observations[observation_count].logofinder_state = 'U';
+        if (observation_count == 0)
+            hybrid_logo_sidecar.first_time_seconds = current_time;
+        previous_time = current_time;
+        hybrid_logo_sidecar.last_time_seconds = current_time;
+        observation_count++;
+    }
+    fclose(sidecar_file);
+
+    if (observation_count == 0)
+    {
+        printf("Hybrid logo sidecar %s contains no observations.\n", sidecar_filename);
+        return false;
+    }
+    hybrid_logo_sidecar.valid = true;
+    hybrid_logo_sidecar.observation_count = observation_count;
+    hybrid_logo_sidecar.load_seconds = (double)(clock() - load_started) / CLOCKS_PER_SEC;
+    printf("Validated hybrid-logo-v1 sidecar: %ld observations, %.3f-%.3f seconds, loaded in %.3f seconds.\n",
+           hybrid_logo_sidecar.observation_count,
+           hybrid_logo_sidecar.first_time_seconds,
+           hybrid_logo_sidecar.last_time_seconds,
+           hybrid_logo_sidecar.load_seconds);
+    return true;
+}
+
+void OutputHybridLogoShadow(void)
+{
+    int i;
+    long j;
+    char output_name[MAX_PATH + 40];
+    FILE *output;
+    clock_t started = clock();
+
+    if (!hybrid_logo_sidecar.valid || !hybrid_logo_observations)
+        return;
+    sprintf(output_name, "%s.hybrid-logo-shadow.csv", workbasename);
+    output = myfopen(output_name, "w");
+    if (!output)
+    {
+        Debug(1, "Could not open hybrid logo shadow output file.\n");
+        return;
+    }
+    fprintf(output,
+            "schema_version,block,frame_start,frame_end,time_start,time_end,normal_score,normal_logo_fraction,normal_logo_state,normal_logo_modifier,hybrid_present_fraction,hybrid_absent_fraction,hybrid_conflict_fraction,hybrid_unknown_fraction,hybrid_logo_evidence,hybrid_logo_modifier,hybrid_shadow_score,normal_classification,shadow_classification,classification_changed\n");
+    for (i = 0; i < block_count; i++)
+    {
+        double start = F2T(cblock[i].f_start);
+        double end = F2T(cblock[i].f_end);
+        double duration = end - start;
+        double present = 0.0;
+        double absent = 0.0;
+        double conflict = 0.0;
+        double unknown = 0.0;
+        double covered = 0.0;
+        double normal_modifier = hybrid_shadow_normal_logo_modifier[i];
+        double hybrid_modifier = 1.0;
+        double shadow_score;
+        char evidence = 'N';
+        bool shadow_commercial;
+
+        for (j = 0; j < hybrid_logo_sidecar.observation_count; j++)
+        {
+            double segment_start = hybrid_logo_observations[j].time_seconds;
+            double segment_end = (j + 1 < hybrid_logo_sidecar.observation_count) ?
+                                 hybrid_logo_observations[j + 1].time_seconds : end;
+            double overlap_start;
+            double overlap_end;
+            double overlap;
+            if (segment_end <= start)
+                continue;
+            if (segment_start >= end)
+                break;
+            overlap_start = segment_start > start ? segment_start : start;
+            overlap_end = segment_end < end ? segment_end : end;
+            overlap = overlap_end - overlap_start;
+            if (overlap <= 0.0)
+                continue;
+            covered += overlap;
+            if (hybrid_logo_observations[j].fusion_state == 'P') present += overlap;
+            else if (hybrid_logo_observations[j].fusion_state == 'A') absent += overlap;
+            else if (hybrid_logo_observations[j].fusion_state == 'C') conflict += overlap;
+            else unknown += overlap;
+        }
+        if (duration <= 0.0)
+            duration = 1.0;
+        if (covered < duration)
+            unknown += duration - covered;
+        present /= duration;
+        absent /= duration;
+        conflict /= duration;
+        unknown /= duration;
+
+        if (present > logo_percentage_threshold)
+        {
+            evidence = 'P';
+            hybrid_modifier = logo_present_modifier;
+        }
+        else if (absent > 1.0 - logo_percentage_threshold)
+        {
+            evidence = 'A';
+            hybrid_modifier = punish_no_logo ? 2.0 : 1.0;
+        }
+        shadow_score = cblock[i].score / normal_modifier * hybrid_modifier;
+        shadow_commercial = shadow_score > global_threshold;
+
+        fprintf(output,
+                "hybrid-logo-shadow-v1,%i,%li,%li,%.6f,%.6f,%.12g,%.9f,%s,%.9f,%.9f,%.9f,%.9f,%.9f,%s,%.9f,%.12g,%s,%s,%i\n",
+                i,
+                cblock[i].f_start,
+                cblock[i].f_end,
+                start,
+                end,
+                cblock[i].score,
+                cblock[i].logo,
+                hybrid_shadow_normal_logo_state[i] == 'P' ? "PRESENT" :
+                    (hybrid_shadow_normal_logo_state[i] == 'A' ? "ABSENT" : "NEUTRAL"),
+                normal_modifier,
+                present,
+                absent,
+                conflict,
+                unknown,
+                evidence == 'P' ? "PRESENT" : (evidence == 'A' ? "ABSENT" : "NEUTRAL"),
+                hybrid_modifier,
+                shadow_score,
+                cblock[i].iscommercial ? "COMMERCIAL" : "SHOW",
+                shadow_commercial ? "COMMERCIAL" : "SHOW",
+                cblock[i].iscommercial != shadow_commercial);
+    }
+    fclose(output);
+    Debug(1, "Hybrid logo shadow scores written to %s in %.3f seconds.\n",
+          output_name, (double)(clock() - started) / CLOCKS_PER_SEC);
+}
+
+void OutputHybridLogoExperimental(void)
+{
+    int i;
+    char output_name[MAX_PATH + 48];
+    FILE *output;
+    clock_t started = clock();
+    sprintf(output_name, "%s.hybrid-logo-experimental.csv", workbasename);
+    output = myfopen(output_name, "w");
+    if (!output)
+    {
+        Debug(1, "Could not open hybrid logo experimental diagnostics.\n");
+        return;
+    }
+    fprintf(output,
+            "schema_version,block,frame_start,frame_end,time_start,time_end,length_seconds,comskip_legacy_logo_fraction,comskip_sidecar_present_fraction,logofinder_present_fraction,fusion_present_fraction,fusion_absent_fraction,fusion_conflict_fraction,fusion_unknown_fraction,hybrid_logo_evidence,hybrid_logo_modifier,excessive_length_would_apply,hybrid_score,hybrid_classification\n");
+    for (i = 0; i < block_count; i++)
+    {
+        hybrid_logo_fractions fractions;
+        char evidence = HybridLogoEvidence(cblock[i].f_start, cblock[i].f_end, &fractions);
+        double modifier = evidence == 'P' ? logo_present_modifier :
+                          (evidence == 'A' && punish_no_logo ? 2.0 : 1.0);
+        const char *length_rule = cblock[i].length > 2 * min_show_segment_length ?
+                                  "twice_excess_length" :
+                                  (cblock[i].length > min_show_segment_length ? "excess_length" : "none");
+        fprintf(output,
+                "hybrid-logo-experimental-v1,%i,%li,%li,%.6f,%.6f,%.6f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%s,%.9f,%s,%.12g,%s\n",
+                i,
+                cblock[i].f_start,
+                cblock[i].f_end,
+                F2T(cblock[i].f_start),
+                F2T(cblock[i].f_end),
+                cblock[i].length,
+                CalculateLegacyLogoFraction(cblock[i].f_start, cblock[i].f_end),
+                fractions.comskip_present,
+                fractions.logofinder_present,
+                fractions.present,
+                fractions.absent,
+                fractions.conflict,
+                fractions.unknown,
+                evidence == 'P' ? "PRESENT" : (evidence == 'A' ? "ABSENT" : "NEUTRAL"),
+                modifier,
+                length_rule,
+                cblock[i].score,
+                cblock[i].iscommercial ? "COMMERCIAL" : "SHOW");
+    }
+    fclose(output);
+    Debug(1, "Hybrid logo experimental diagnostics written to %s in %.3f seconds.\n",
+          output_name, (double)(clock() - started) / CLOCKS_PER_SEC);
 }
 
 void InitializeFrameArray(long i)
