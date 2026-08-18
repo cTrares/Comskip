@@ -302,6 +302,7 @@ def comskip_command(
     logo: Path | None = None,
     sidecar: Path | None = None,
     raw: bool = False,
+    framearray: bool = False,
     final: bool = False,
 ) -> list[str]:
     command = [
@@ -312,10 +313,129 @@ def comskip_command(
         command.extend(["--logo", str(logo)])
     if raw:
         command.append("--logo-raw")
+    if framearray:
+        command.append("--csvout")
     if sidecar is not None:
         command.extend(["--hybrid-logo-sidecar", str(sidecar)])
     command.append(str(video))
     return command
+
+
+def framearray_rescore_command(
+    args: argparse.Namespace,
+    framearray_path: Path,
+    output: Path,
+    output_name: str,
+    *,
+    logo: Path,
+    sidecar: Path,
+) -> list[str]:
+    if framearray_path.suffix.lower() != ".csv":
+        raise ValueError(f"Final Comskip rescore requires a framearray CSV, got {framearray_path}")
+    return comskip_command(
+        args,
+        framearray_path,
+        output,
+        output_name,
+        logo=logo,
+        sidecar=sidecar,
+        final=True,
+    )
+
+
+def completed_comskip_frame_count(path: Path) -> int:
+    if not path.is_file():
+        raise RuntimeError(f"Comskip completion file is missing: {path}")
+    with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
+        parts = handle.readline().split()
+    if len(parts) < 5 or parts[:3] != ["FILE", "PROCESSING", "COMPLETE"] or parts[4] != "FRAMES":
+        raise RuntimeError(f"Comskip completion header is invalid: {path}")
+    try:
+        frame_count = int(parts[3])
+    except ValueError as exc:
+        raise RuntimeError(f"Comskip completion frame count is invalid: {path}") from exc
+    if frame_count <= 0:
+        raise RuntimeError(f"Comskip reported no processed frames: {path}")
+    return frame_count
+
+
+def validate_framearray(
+    path: Path,
+    completion_path: Path,
+    expected_frames: int,
+    *,
+    minimum_mtime_ns: int | None = None,
+) -> dict:
+    if not path.is_file():
+        raise RuntimeError(f"Comskip framearray CSV is missing: {path}")
+    stat = path.stat()
+    if stat.st_size <= 0:
+        raise RuntimeError(f"Comskip framearray CSV is empty: {path}")
+    if minimum_mtime_ns is not None and stat.st_mtime_ns < minimum_mtime_ns:
+        raise RuntimeError(f"Comskip framearray CSV is stale: {path}")
+
+    completed_frames = completed_comskip_frame_count(completion_path)
+    rows = 0
+    with path.open("r", encoding="utf-8-sig", errors="strict", newline="") as handle:
+        separator = handle.readline().strip()
+        header = next(csv.reader([handle.readline()]), [])
+        if separator != "sep=," or len(header) < 17 or header[0] != "frame" or header[16] != "PTS":
+            raise RuntimeError(f"Comskip framearray CSV header is invalid: {path}")
+        for line_number, line in enumerate(handle, start=3):
+            if not line.strip():
+                continue
+            frame_text = line.split(",", 1)[0]
+            try:
+                frame_number = int(frame_text)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"Comskip framearray CSV has an invalid frame number at line {line_number}: {path}"
+                ) from exc
+            rows += 1
+            if frame_number != rows:
+                raise RuntimeError(
+                    f"Comskip framearray CSV is not contiguous at line {line_number}: "
+                    f"expected frame {rows}, got {frame_number}"
+                )
+
+    if rows != completed_frames:
+        raise RuntimeError(
+            f"Comskip framearray CSV is incomplete: {rows} rows, completion reports {completed_frames} frames"
+        )
+    if expected_frames <= 0 or abs(rows - expected_frames) > max(1, int(expected_frames * 0.05)):
+        raise RuntimeError(
+            f"Comskip framearray CSV frame count is implausible: {rows} rows, expected about {expected_frames}"
+        )
+    return {
+        "path": str(path),
+        "bytes": stat.st_size,
+        "frames": rows,
+        "mtime_ns": stat.st_mtime_ns,
+    }
+
+
+def validate_csv_rescore_log(command_log: Path, comskip_log: Path) -> dict:
+    if not command_log.is_file():
+        raise RuntimeError(f"Final Comskip command log is missing: {command_log}")
+    if not comskip_log.is_file():
+        raise RuntimeError(f"Final Comskip output log is missing: {comskip_log}")
+    command_text = command_log.read_text(encoding="utf-8", errors="replace")
+    comskip_text = comskip_log.read_text(encoding="utf-8", errors="replace")
+    combined_text = command_text + "\n" + comskip_text
+    checks = {
+        "csv_input_opened": " array file." in command_text and "Opening " in command_text,
+        "process_csv_loaded": "CSV file loaded into memory." in comskip_text,
+        "commercial_list_built": "Finished scanning file.  Starting to build Commercial List." in comskip_text,
+        "hybrid_sidecar_loaded": "Validated hybrid-logo-v1 sidecar:" in command_text,
+        "video_decode_absent": "frames decoded in" not in combined_text,
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        raise RuntimeError(
+            f"Final Comskip CSV rescore validation failed: {', '.join(failed)}; "
+            f"see {command_log} and {comskip_log}"
+        )
+    return checks
 
 
 def compact_state(value: str) -> str:
@@ -450,15 +570,33 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
     sensor_root = film_root / "comskip_sensor"
     sensor_root.mkdir(exist_ok=args.resume_incomplete)
     raw_path = sensor_root / f"{base}.logo-raw.csv"
+    framearray_path = sensor_root / f"{base}.csv"
     sensor_txt = sensor_root / f"{base}.txt"
-    if args.resume_incomplete and raw_path.is_file() and sensor_txt.is_file():
+    sensor_minimum_mtime_ns = None
+    if args.resume_incomplete and raw_path.is_file() and framearray_path.is_file() and sensor_txt.is_file():
         sensor_seconds = 0.0
     else:
+        sensor_minimum_mtime_ns = time.time_ns()
         sensor_seconds = run_command(
-            comskip_command(args, video, sensor_root, base, logo=selected_path, raw=True),
+            comskip_command(
+                args,
+                video,
+                sensor_root,
+                base,
+                logo=selected_path,
+                raw=True,
+                framearray=True,
+            ),
             log_path=sensor_root / "comskip-command.log",
             accepted_exit_codes=(0, 1),
         )
+    framearray = validate_framearray(
+        framearray_path,
+        sensor_txt,
+        metadata["total_frames"],
+        minimum_mtime_ns=sensor_minimum_mtime_ns,
+    )
+    exit_trace("COMSKIP_FRAMEARRAY_VALIDATED", **framearray)
 
     internal_sensor_root = film_root / "internal_logo_sensor"
     logofinder_timeline = internal_sensor_root / "hybrid_logo_timeline.jsonl"
@@ -517,12 +655,22 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
     final_root = film_root / "final"
     final_root.mkdir(exist_ok=args.resume_incomplete)
     exit_trace("FINAL_COMSKIP_START")
+    final_log = final_root / "comskip-command.log"
     final_seconds = run_command(
-        comskip_command(args, video, final_root, base, logo=selected_path, sidecar=sidecar, final=True),
-        log_path=final_root / "comskip-command.log",
+        framearray_rescore_command(
+            args,
+            framearray_path,
+            final_root,
+            base,
+            logo=selected_path,
+            sidecar=sidecar,
+        ),
+        log_path=final_log,
         accepted_exit_codes=(0, 1),
     )
     exit_trace("FINAL_COMSKIP_END", duration_seconds=final_seconds)
+    rescore_validation = validate_csv_rescore_log(final_log, final_root / f"{base}.log")
+    exit_trace("FINAL_COMSKIP_CSV_RESCORE_VALIDATED", **rescore_validation)
     generated_final = final_root / f"{base}.txt"
     final_stage_txt = film_root / f"{base}.final-stage.txt"
     shutil.copy2(generated_final, final_stage_txt)
@@ -583,6 +731,10 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
             "final_comskip": final_seconds,
             "total": time.perf_counter() - film_started,
         },
+        "framearray": framearray,
+        "final_comskip_input": str(framearray_path),
+        "final_comskip_input_mode": "csv",
+        "final_csv_rescore_validation": rescore_validation,
         "outputs": {
             "logo_stage_txt": str(logo_stage_txt),
             "logo_stage_csv": str(logo_stage_csv),

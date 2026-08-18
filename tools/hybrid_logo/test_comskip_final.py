@@ -82,6 +82,7 @@ class ComskipFinalTests(unittest.TestCase):
             work.mkdir()
             (work / "command.log").write_text("log", encoding="utf-8")
             (work / "sensor.logo-raw.csv").write_text("large", encoding="utf-8")
+            (work / "sensor.csv").write_text("full framearray", encoding="utf-8")
             (work / "hybrid-logo.jsonl").write_text("large", encoding="utf-8")
             (work / "clip.mp4").write_bytes(b"clip")
             try:
@@ -93,6 +94,7 @@ class ComskipFinalTests(unittest.TestCase):
             self.assertIn("failure.json", names)
             self.assertIn("command.log", names)
             self.assertNotIn("sensor.logo-raw.csv", names)
+            self.assertNotIn("sensor.csv", names)
             self.assertNotIn("hybrid-logo.jsonl", names)
             self.assertNotIn("clip.mp4", names)
             package.unlink()
