@@ -15,10 +15,29 @@ from multiwindow_logo_experiment import (
     learning_window_artifacts,
     learning_windows,
     parse_mask,
+    processed_comskip_frame_count,
     select_recurring_candidate,
     validate_csv_rescore_log,
     validate_framearray,
+    validate_framearray_extent,
 )
+
+
+FRAMEARRAY_HEADER = (
+    "sep=,\n"
+    "frame,brightness,scene_change,logo,uniform,sound,minY,MaxY,ar_ratio,goodEdge,"
+    "isblack,cutscene, MinX, MaxX, hasBright, Dimcount,PTS,25.0\n"
+)
+
+
+def write_framearray(path: Path, frame_numbers: list[int] | range) -> None:
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(FRAMEARRAY_HEADER)
+        for frame_number in frame_numbers:
+            handle.write(
+                f"{frame_number},1,1,0,1,1,1,1,1.0,0.0,0,0,1,1,1,1,"
+                f"{(frame_number - 1) / 25.0},0,2\n"
+            )
 
 
 class MultiwindowLogoExperimentTests(unittest.TestCase):
@@ -86,48 +105,101 @@ class MultiwindowLogoExperimentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             completion = root / "film.txt"
-            completion.write_text("FILE PROCESSING COMPLETE 3 FRAMES AT 2500\n", encoding="utf-8")
+            completion.write_text("FILE PROCESSING COMPLETE 1 FRAMES AT 2500\n", encoding="utf-8")
+            processed_log = root / "film.log"
+            processed_log.write_text("4 Frames Processed\n", encoding="utf-8")
             framearray = root / "film.csv"
-            framearray.write_text(
-                "sep=,\n"
-                "frame,brightness,scene_change,logo,uniform,sound,minY,MaxY,ar_ratio,goodEdge,"
-                "isblack,cutscene, MinX, MaxX, hasBright, Dimcount,PTS,25.0\n"
-                "1,1,1,0,1,1,1,1,1.0,0.0,0,0,1,1,1,1,0.0,0,2\n"
-                "2,1,1,0,1,1,1,1,1.0,0.0,0,0,1,1,1,1,0.04,0,2\n"
-                "3,1,1,0,1,1,1,1,1.0,0.0,0,0,1,1,1,1,0.08,0,2\n",
-                encoding="utf-8",
+            write_framearray(framearray, range(1, 4))
+            result = validate_framearray(
+                framearray,
+                completion,
+                3,
+                processed_log_path=processed_log,
             )
-            result = validate_framearray(framearray, completion, 3)
             self.assertEqual(result["frames"], 3)
+            self.assertEqual(result["processed_frames"], 4)
+            self.assertEqual(result["completion_frames"], 1)
             self.assertGreater(result["bytes"], 0)
             with self.assertRaisesRegex(RuntimeError, "is stale"):
                 validate_framearray(
                     framearray,
                     completion,
                     3,
+                    processed_log_path=processed_log,
                     minimum_mtime_ns=framearray.stat().st_mtime_ns + 1,
                 )
+
+    def test_framearray_extent_uses_processed_frames_for_real_cases(self) -> None:
+        validate_framearray_extent(177431, 177431, 177432)
+        validate_framearray_extent(396744, 396744, 396745)
+
+    def test_processed_frame_parser_uses_latest_sensor_log_value(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "sensor.log"
+            log.write_text(
+                "older resumed run\n99 Frames Processed\ncurrent resumed run\n100 Frames Processed\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(processed_comskip_frame_count(log), 100)
+
+    def test_framearray_validation_rejects_structural_errors(self) -> None:
+        cases = {
+            "truncated_end": list(range(1, 99)),
+            "gap": list(range(1, 51)) + list(range(52, 100)),
+            "duplicate": list(range(1, 51)) + [50] + list(range(51, 100)),
+            "wrong_start": list(range(0, 99)),
+            "additional_frame": list(range(1, 101)),
+        }
+        for name, frame_numbers in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                completion = root / "film.txt"
+                completion.write_text("FILE PROCESSING COMPLETE 100 FRAMES AT 2500\n", encoding="utf-8")
+                processed_log = root / "film.log"
+                processed_log.write_text("100 Frames Processed\n", encoding="utf-8")
+                framearray = root / "film.csv"
+                write_framearray(framearray, frame_numbers)
+                with self.assertRaisesRegex(RuntimeError, "incomplete|not contiguous"):
+                    validate_framearray(
+                        framearray,
+                        completion,
+                        99,
+                        processed_log_path=processed_log,
+                    )
+
+    def test_framearray_validation_accepts_indices_one_through_processed_minus_one(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            completion = root / "film.txt"
+            completion.write_text("FILE PROCESSING COMPLETE 97 FRAMES AT 2500\n", encoding="utf-8")
+            processed_log = root / "film.log"
+            processed_log.write_text("100 Frames Processed\n", encoding="utf-8")
+            framearray = root / "film.csv"
+            write_framearray(framearray, range(1, 100))
+            result = validate_framearray(
+                framearray,
+                completion,
+                99,
+                processed_log_path=processed_log,
+            )
+            self.assertEqual(result["frames"], 99)
 
     def test_framearray_validation_rejects_missing_empty_and_incomplete_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             completion = root / "film.txt"
             completion.write_text("FILE PROCESSING COMPLETE 2 FRAMES AT 2500\n", encoding="utf-8")
+            processed_log = root / "film.log"
+            processed_log.write_text("3 Frames Processed\n", encoding="utf-8")
             framearray = root / "film.csv"
             with self.assertRaisesRegex(RuntimeError, "is missing"):
-                validate_framearray(framearray, completion, 2)
+                validate_framearray(framearray, completion, 2, processed_log_path=processed_log)
             framearray.write_bytes(b"")
             with self.assertRaisesRegex(RuntimeError, "is empty"):
-                validate_framearray(framearray, completion, 2)
-            framearray.write_text(
-                "sep=,\n"
-                "frame,brightness,scene_change,logo,uniform,sound,minY,MaxY,ar_ratio,goodEdge,"
-                "isblack,cutscene, MinX, MaxX, hasBright, Dimcount,PTS,25.0\n"
-                "1,1,1,0,1,1,1,1,1.0,0.0,0,0,1,1,1,1,0.0,0,2\n",
-                encoding="utf-8",
-            )
+                validate_framearray(framearray, completion, 2, processed_log_path=processed_log)
+            write_framearray(framearray, [1])
             with self.assertRaisesRegex(RuntimeError, "is incomplete"):
-                validate_framearray(framearray, completion, 2)
+                validate_framearray(framearray, completion, 2, processed_log_path=processed_log)
 
     def test_csv_rescore_log_requires_process_csv_and_no_decode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

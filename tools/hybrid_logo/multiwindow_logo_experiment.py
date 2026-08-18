@@ -388,11 +388,42 @@ def completed_comskip_frame_count(path: Path) -> int:
     return frame_count
 
 
+def processed_comskip_frame_count(path: Path) -> int:
+    if not path.is_file():
+        raise RuntimeError(f"Comskip log file is missing: {path}")
+    processed_frames: int | None = None
+    with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
+        for line in handle:
+            parts = line.split()
+            if len(parts) != 3 or parts[1:] != ["Frames", "Processed"]:
+                continue
+            try:
+                candidate = int(parts[0])
+            except ValueError as exc:
+                raise RuntimeError(f"Comskip processed frame count is invalid: {path}") from exc
+            if candidate <= 0:
+                raise RuntimeError(f"Comskip reported no processed frames: {path}")
+            processed_frames = candidate
+    if processed_frames is None:
+        raise RuntimeError(f"Comskip processed frame count is missing: {path}")
+    return processed_frames
+
+
+def validate_framearray_extent(rows: int, last_index: int, processed_frames: int) -> None:
+    expected_last_index = processed_frames - 1
+    if rows != expected_last_index or last_index != expected_last_index:
+        raise RuntimeError(
+            f"Comskip framearray CSV is incomplete: {rows} rows ending at frame {last_index}, "
+            f"expected indices 1 through {expected_last_index} from {processed_frames} Frames Processed"
+        )
+
+
 def validate_framearray(
     path: Path,
     completion_path: Path,
     expected_frames: int,
     *,
+    processed_log_path: Path,
     minimum_mtime_ns: int | None = None,
 ) -> dict:
     if not path.is_file():
@@ -404,7 +435,9 @@ def validate_framearray(
         raise RuntimeError(f"Comskip framearray CSV is stale: {path}")
 
     completed_frames = completed_comskip_frame_count(completion_path)
+    processed_frames = processed_comskip_frame_count(processed_log_path)
     rows = 0
+    last_index = 0
     with path.open("r", encoding="utf-8-sig", errors="strict", newline="") as handle:
         separator = handle.readline().strip()
         header = next(csv.reader([handle.readline()]), [])
@@ -426,11 +459,9 @@ def validate_framearray(
                     f"Comskip framearray CSV is not contiguous at line {line_number}: "
                     f"expected frame {rows}, got {frame_number}"
                 )
+            last_index = frame_number
 
-    if rows != completed_frames:
-        raise RuntimeError(
-            f"Comskip framearray CSV is incomplete: {rows} rows, completion reports {completed_frames} frames"
-        )
+    validate_framearray_extent(rows, last_index, processed_frames)
     if expected_frames <= 0 or abs(rows - expected_frames) > max(1, int(expected_frames * 0.05)):
         raise RuntimeError(
             f"Comskip framearray CSV frame count is implausible: {rows} rows, expected about {expected_frames}"
@@ -439,6 +470,8 @@ def validate_framearray(
         "path": str(path),
         "bytes": stat.st_size,
         "frames": rows,
+        "processed_frames": processed_frames,
+        "completion_frames": completed_frames,
         "mtime_ns": stat.st_mtime_ns,
     }
 
@@ -601,8 +634,15 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
     raw_path = sensor_root / f"{SENSOR_OUTPUT_NAME}.logo-raw.csv"
     framearray_path = sensor_root / f"{SENSOR_OUTPUT_NAME}.csv"
     sensor_txt = sensor_root / f"{SENSOR_OUTPUT_NAME}.txt"
+    sensor_log = sensor_root / f"{SENSOR_OUTPUT_NAME}.log"
     sensor_minimum_mtime_ns = None
-    if args.resume_incomplete and raw_path.is_file() and framearray_path.is_file() and sensor_txt.is_file():
+    if (
+        args.resume_incomplete
+        and raw_path.is_file()
+        and framearray_path.is_file()
+        and sensor_txt.is_file()
+        and sensor_log.is_file()
+    ):
         sensor_seconds = 0.0
     else:
         sensor_minimum_mtime_ns = time.time_ns()
@@ -623,6 +663,7 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
         framearray_path,
         sensor_txt,
         metadata["total_frames"],
+        processed_log_path=sensor_log,
         minimum_mtime_ns=sensor_minimum_mtime_ns,
     )
     exit_trace("COMSKIP_FRAMEARRAY_VALIDATED", **framearray)
