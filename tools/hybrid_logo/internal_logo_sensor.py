@@ -461,9 +461,12 @@ def overlay_present_score_from_crop(
     reference: OverlayReference,
     crop: np.ndarray,
     timings: dict[str, float] | None = None,
+    details: dict[str, float] | None = None,
 ) -> float:
     """Score an already-cropped BGR ROI with the released sensor calculation."""
     if crop.size == 0:
+        if details is not None:
+            details.update(gray_score=0.0, edge_score=0.0, score=0.0)
         return 0.0
 
     started = time.perf_counter()
@@ -490,6 +493,8 @@ def overlay_present_score_from_crop(
         gray_score = cv2.matchTemplate(gray, reference.gray, cv2.TM_CCORR_NORMED, mask=reference.template_mask)
         _record_elapsed(timings, "gray_correlation", started)
     except cv2.error:
+        if details is not None:
+            details.update(gray_score=0.0, edge_score=0.0, score=0.0)
         return 0.0
     started = time.perf_counter()
     edge_value = float(cv2.minMaxLoc(edge_score)[1])
@@ -501,7 +506,10 @@ def overlay_present_score_from_crop(
         gray_value = 0.0
     edge_value = max(0.0, min(1.0, edge_value))
     gray_value = max(0.0, min(1.0, gray_value))
-    return max(0.0, min(1.0, edge_value * 0.76 + gray_value * 0.24))
+    value = max(0.0, min(1.0, edge_value * 0.76 + gray_value * 0.24))
+    if details is not None:
+        details.update(gray_score=gray_value, edge_score=edge_value, score=value)
+    return value
 
 
 def overlay_present_score(reference: OverlayReference, frame_bgr: np.ndarray) -> float:

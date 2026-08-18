@@ -18,6 +18,7 @@ from hybrid_logo_fusion import run as run_hybrid_logo_fusion
 
 
 LEARNING_GUARD_SECONDS = 6 * 60
+INTERNAL_LOGO_SCORE_WORKERS = 8
 WINDOW_COUNT = 5
 DEFAULT_WINDOW_SECONDS = 120.0
 
@@ -481,6 +482,7 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
             sharp_delta=0.12,
             refine_subdivisions=5,
             every_frame=True,
+            score_workers=INTERNAL_LOGO_SCORE_WORKERS,
             exit_trace=exit_trace,
         ))
         logofinder_seconds = time.perf_counter() - analysis_started

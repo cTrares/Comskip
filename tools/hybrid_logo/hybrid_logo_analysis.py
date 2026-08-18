@@ -7,6 +7,8 @@ import os
 import subprocess
 import sys
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -32,6 +34,42 @@ class ComskipPoint:
     local_state_end: bool
     global_logo_percentage: float
     global_logo_enabled: bool
+
+
+def ordered_bounded_map(
+    function: Callable,
+    items: Iterable,
+    *,
+    max_workers: int,
+    max_in_flight: int,
+    depth_observer: Callable[[int], None] | None = None,
+):
+    """Run frame-local work concurrently while yielding results in input order."""
+    if max_workers < 1:
+        raise ValueError("max_workers must be positive")
+    if max_in_flight < max_workers:
+        raise ValueError("max_in_flight must be at least max_workers")
+    observe = depth_observer or (lambda _depth: None)
+    if max_workers == 1:
+        for item in items:
+            observe(1)
+            yield function(item)
+        return
+
+    pending = deque()
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="internal-logo-score") as executor:
+        try:
+            for item in items:
+                pending.append(executor.submit(function, item))
+                observe(len(pending))
+                if len(pending) >= max_in_flight:
+                    yield pending.popleft().result()
+            while pending:
+                yield pending.popleft().result()
+        except BaseException:
+            for future in pending:
+                future.cancel()
+            raise
 
 
 def parse_args() -> argparse.Namespace:
@@ -209,6 +247,7 @@ class FrameScorer:
         score_function: Callable,
         crop_score_function: Callable | None = None,
         exit_trace: Callable[..., None] | None = None,
+        collect_score_details: bool = False,
     ):
         self._cv2 = cv2
         self._np = np
@@ -218,6 +257,7 @@ class FrameScorer:
         self._score_function = score_function
         self._crop_score_function = crop_score_function
         self._exit_trace = exit_trace or (lambda _stage, **_details: None)
+        self._collect_score_details = collect_score_details
         self._cache: dict[int, float] = {}
         self.request_count = 0
         self.seek_count = 0
@@ -228,6 +268,8 @@ class FrameScorer:
         self.video_open_count = 0
         self.full_frame_decodes = 0
         self.roi_decodes = 0
+        self.max_in_flight_frames = 0
+        self.score_details: list[dict[str, float | int]] = []
 
     def _ensure_capture(self):
         if self._capture is None:
@@ -290,6 +332,7 @@ class FrameScorer:
         fps: float,
         threshold: float,
         ffmpeg: Path,
+        score_workers: int,
     ) -> list[TimelinePoint]:
         if self._crop_score_function is None:
             raise RuntimeError("No crop score function is configured")
@@ -320,9 +363,24 @@ class FrameScorer:
         self.video_open_count += 1
         frame_bytes = bytearray(width * height * 3)
         points: list[TimelinePoint] = []
-        try:
-            if process.stdout is None or process.stderr is None:
-                raise RuntimeError("FFmpeg ROI decoder pipes are unavailable")
+        max_in_flight = max(1, score_workers * 2)
+
+        def observe_depth(depth: int) -> None:
+            self.max_in_flight_frames = max(self.max_in_flight_frames, depth)
+
+        def score_crop(item):
+            frame, image = item
+            timings: dict[str, float] = {}
+            details: dict[str, float] | None = {} if self._collect_score_details else None
+            started = time.perf_counter()
+            if details is None:
+                value = float(self._crop_score_function(self._reference, image, timings))
+            else:
+                value = float(self._crop_score_function(self._reference, image, timings, details))
+            elapsed = time.perf_counter() - started
+            return frame, value, elapsed, timings, details
+
+        def decoded_frames():
             for frame in range(maximum_frames):
                 started = time.perf_counter()
                 complete = self._read_exact(process.stdout, frame_bytes)
@@ -332,15 +390,25 @@ class FrameScorer:
                 image = self._np.frombuffer(frame_bytes, dtype=self._np.uint8).reshape(
                     (height, width, 3)
                 )
-                started = time.perf_counter()
-                value = float(
-                    self._crop_score_function(
-                        self._reference,
-                        image,
-                        self.score_timings,
-                    )
-                )
-                self.score_seconds += time.perf_counter() - started
+                if score_workers > 1:
+                    image = image.copy()
+                self.roi_decodes += 1
+                yield frame, image
+
+        try:
+            if process.stdout is None or process.stderr is None:
+                raise RuntimeError("FFmpeg ROI decoder pipes are unavailable")
+            results = ordered_bounded_map(
+                score_crop,
+                decoded_frames(),
+                max_workers=score_workers,
+                max_in_flight=max_in_flight,
+                depth_observer=observe_depth,
+            )
+            for frame, value, elapsed, timings, details in results:
+                self.score_seconds += elapsed
+                for key, duration in timings.items():
+                    self.score_timings[key] = self.score_timings.get(key, 0.0) + duration
                 points.append(
                     TimelinePoint(
                         frame=frame,
@@ -351,7 +419,8 @@ class FrameScorer:
                     )
                 )
                 self.request_count += 1
-                self.roi_decodes += 1
+                if details is not None:
+                    self.score_details.append({"frame": frame, **details})
             process.stdout.close()
             self._exit_trace("ROI_FFMPEG_STDOUT_CLOSED", pid=process.pid)
             self._exit_trace("ROI_FFMPEG_STDERR_READ_START", pid=process.pid)
@@ -384,6 +453,7 @@ class FrameScorer:
         fps: float,
         threshold: float,
         ffmpeg: Path | None = None,
+        score_workers: int = 1,
     ) -> list[TimelinePoint]:
         """Decode sequentially and apply only the already learned crop scorer."""
         if ffmpeg is not None and ffmpeg.is_file():
@@ -392,6 +462,7 @@ class FrameScorer:
                 fps=fps,
                 threshold=threshold,
                 ffmpeg=ffmpeg,
+                score_workers=score_workers,
             )
         capture = self._ensure_capture()
         points: list[TimelinePoint] = []
@@ -713,6 +784,7 @@ def run(args: argparse.Namespace) -> dict:
                     fps=fps,
                     threshold=args.present_threshold,
                     ffmpeg=getattr(args, "ffmpeg", None),
+                    score_workers=getattr(args, "score_workers", 1),
                 )
             else:
                 timeline = build_timeline(
@@ -817,6 +889,8 @@ def run(args: argparse.Namespace) -> dict:
             "full_frame_image_operations_after_learning": full_frame_decodes,
             "roi_image_operations_after_learning": roi_decodes,
             "correlation_calculations": requested_frames * 2,
+            "score_workers": getattr(args, "score_workers", 1) if unavailable_reason is None else 0,
+            "max_score_frames_in_flight": scorer.max_in_flight_frames if unavailable_reason is None else 0,
         },
         "comskip_raw": str(args.comskip_raw.resolve()) if args.comskip_raw else None,
         "performance_seconds": {
