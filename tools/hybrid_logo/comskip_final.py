@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import shutil
 import sys
 import tempfile
@@ -13,21 +14,32 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from multiwindow_logo_experiment import DEFAULT_WINDOW_SECONDS, run_film
+from multiwindow_logo_experiment import (
+    DEFAULT_WINDOW_SECONDS,
+    DIAGNOSTIC_NAME,
+    FINAL_DIRECTORY_NAME,
+    FINAL_OUTPUT_NAME,
+    SELECTED_MASK_NAME,
+    run_film,
+)
 
 
 VERSION = "Comskip custom final logo workflow 2026-08-18-puls-fix"
 _ACTIVE_TRACE: "ExitTrace | None" = None
+RUN_DIRECTORY_NAME = "r"
+FILM_DIRECTORY_NAME = "run"
+REVIEW_DIRECTORY_NAME = "review"
+RUN_ID_BYTES = 5
 
 
 class ExitTrace:
-    def __init__(self, video: Path):
+    def __init__(self, video: Path, run_id: str):
         trace_root = runtime_root() / "traces"
         trace_root.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        self.path = trace_root / f"{video.stem}-{timestamp}.jsonl"
+        self.path = trace_root / f"{run_id}-{timestamp}.jsonl"
         self.started = time.perf_counter()
-        self.mark("TRACE_STARTED", video=str(video), pid=os.getpid())
+        self.mark("TRACE_STARTED", video=str(video), run_id=run_id, pid=os.getpid())
 
     def mark(self, stage: str, **details: object) -> None:
         record = {
@@ -75,6 +87,19 @@ def runtime_root() -> Path:
     return Path(tempfile.gettempdir()) / "ComskipFinal"
 
 
+def create_run_workspace(runs_root: Path) -> tuple[str, Path]:
+    runs_root.mkdir(parents=True, exist_ok=True)
+    for _attempt in range(100):
+        run_id = secrets.token_hex(RUN_ID_BYTES)
+        work_root = runs_root / run_id
+        try:
+            work_root.mkdir()
+        except FileExistsError:
+            continue
+        return run_id, work_root
+    raise RuntimeError(f"Could not allocate a unique short run workspace below {runs_root}")
+
+
 def atomic_copy(
     source: Path,
     destination: Path,
@@ -90,7 +115,7 @@ def atomic_copy(
         trace.mark(f"{label}_PARENT_READY_CHECK_END")
         trace.mark(f"{label}_TEMP_CREATE_START")
     descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+        prefix=".cf-", suffix=".tmp", dir=destination.parent
     )
     if trace:
         trace.mark(f"{label}_TEMP_CREATE_END", temporary=temporary_name)
@@ -125,7 +150,7 @@ def atomic_write_text(
         trace.mark(f"{label}_PARENT_READY_CHECK_END")
         trace.mark(f"{label}_TEMP_CREATE_START")
     descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+        prefix=".cf-", suffix=".tmp", dir=destination.parent
     )
     if trace:
         trace.mark(f"{label}_TEMP_CREATE_END", temporary=temporary_name)
@@ -156,15 +181,18 @@ def create_diagnostic_package(
     work_root: Path,
     exc: BaseException,
     trace: ExitTrace | None = None,
+    run_id: str | None = None,
 ) -> Path:
     diagnostic_root = runtime_root() / "diagnostics"
     diagnostic_root.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    destination = diagnostic_root / f"{video.stem}-{timestamp}.zip"
+    diagnostic_id = run_id or secrets.token_hex(RUN_ID_BYTES)
+    destination = diagnostic_root / f"{diagnostic_id}-{timestamp}.zip"
     temporary = destination.with_suffix(".tmp")
     failure = {
         "schema_version": 1,
         "workflow_version": VERSION,
+        "run_id": diagnostic_id,
         "video": str(video),
         "error_type": type(exc).__name__,
         "error": str(exc),
@@ -199,8 +227,8 @@ def copy_final_outputs(
     trace: ExitTrace | None = None,
 ) -> list[Path]:
     base = video.stem
-    final_root = film_root / "final"
-    final_txt = final_root / f"{base}.txt"
+    final_root = film_root / FINAL_DIRECTORY_NAME
+    final_txt = final_root / f"{FINAL_OUTPUT_NAME}.txt"
     if trace:
         trace.mark("FINAL_TXT_VALIDATION_START", path=str(final_txt))
     if not complete_comskip_txt(final_txt):
@@ -210,17 +238,17 @@ def copy_final_outputs(
         trace.mark("PORTABLE_OUTPUTS_PREPARE", destination_dir=str(video.parent))
     copied: list[Path] = []
     for suffix in (".edl", ".log"):
-        source = final_root / f"{base}{suffix}"
+        source = final_root / f"{FINAL_OUTPUT_NAME}{suffix}"
         if source.is_file():
             destination = video.with_suffix(suffix)
             atomic_copy(source, destination, trace=trace, label=suffix[1:].upper())
             copied.append(destination)
-    selected_logo = film_root / "selected-comskip-logo.txt"
+    selected_logo = film_root / SELECTED_MASK_NAME
     if selected_logo.is_file():
         destination = video.with_name(base + ".logo.txt")
         atomic_copy(selected_logo, destination, trace=trace, label="LOGO_TXT")
         copied.append(destination)
-    diagnostic = film_root / "multiwindow_diagnostic.json"
+    diagnostic = film_root / DIAGNOSTIC_NAME
     if diagnostic.is_file():
         destination = video.with_name(base + ".comskip-final.json")
         payload = json.loads(diagnostic.read_text(encoding="utf-8"))
@@ -259,7 +287,9 @@ def main() -> int:
         print("Required file not found: " + ", ".join(missing), file=sys.stderr)
         return 2
 
-    trace = ExitTrace(video)
+    runs_root = runtime_root() / RUN_DIRECTORY_NAME
+    run_id, work_root = create_run_workspace(runs_root)
+    trace = ExitTrace(video, run_id)
     _ACTIVE_TRACE = trace
     trace.mark(
         "RUNTIME_PATHS_VALIDATED",
@@ -268,14 +298,13 @@ def main() -> int:
         ini=str(args.ini.resolve()),
         ffmpeg=str(args.ffmpeg.resolve()),
         ffprobe=str(args.ffprobe.resolve()),
+        run_id=run_id,
     )
 
-    runs_root = runtime_root() / "runs"
-    runs_root.mkdir(parents=True, exist_ok=True)
-    work_root = Path(tempfile.mkdtemp(prefix=f"{video.stem}-", dir=runs_root))
     run_args = argparse.Namespace(
-        output_root=work_root / "run",
-        sight_root=work_root / "review",
+        output_root=work_root,
+        sight_root=work_root / REVIEW_DIRECTORY_NAME,
+        film_dirname=FILM_DIRECTORY_NAME,
         comskip=args.comskip.resolve(),
         ini=args.ini.resolve(),
         ffmpeg=args.ffmpeg.resolve(),
@@ -285,7 +314,7 @@ def main() -> int:
     )
     exit_code = 0
     try:
-        run_args.output_root.mkdir(parents=True)
+        run_args.output_root.mkdir(parents=True, exist_ok=True)
         run_args.sight_root.mkdir(parents=True)
         print(f"Comskip final: analysing {video.name}", flush=True)
         trace.mark("RUN_FILM_START", work_root=str(work_root))
@@ -293,14 +322,14 @@ def main() -> int:
         result = run_film(run_args, video.stem, video)
         trace.mark("RUN_FILM_RETURNED", final_stage=result.get("final_stage_intervals"))
         trace.mark("COPY_FINAL_OUTPUTS_START")
-        copied = copy_final_outputs(video, run_args.output_root / video.stem, result, trace=trace)
+        copied = copy_final_outputs(video, run_args.output_root / FILM_DIRECTORY_NAME, result, trace=trace)
         trace.mark("COPY_FINAL_OUTPUTS_RETURNED")
         print("Comskip final: outputs " + ", ".join(path.name for path in copied), flush=True)
     except Exception as exc:
         print(f"Comskip final: {exc}", file=sys.stderr)
         trace.mark("MAIN_EXCEPTION", error_type=type(exc).__name__, error=str(exc))
         try:
-            diagnostic = create_diagnostic_package(video, work_root, exc, trace=trace)
+            diagnostic = create_diagnostic_package(video, work_root, exc, trace=trace, run_id=run_id)
             print(f"Diagnostic package: {diagnostic}", file=sys.stderr)
         except Exception as diagnostic_exc:
             print(f"Could not create diagnostic package: {diagnostic_exc}", file=sys.stderr)

@@ -21,6 +21,14 @@ LEARNING_GUARD_SECONDS = 6 * 60
 INTERNAL_LOGO_SCORE_WORKERS = 8
 WINDOW_COUNT = 5
 DEFAULT_WINDOW_SECONDS = 120.0
+LEARNING_DIRECTORY_NAME = "learn"
+SENSOR_DIRECTORY_NAME = "sensor"
+INTERNAL_SENSOR_DIRECTORY_NAME = "internal"
+FINAL_DIRECTORY_NAME = "final"
+SENSOR_OUTPUT_NAME = "sensor"
+FINAL_OUTPUT_NAME = "final"
+SELECTED_MASK_NAME = "selected.logo.txt"
+DIAGNOSTIC_NAME = "diagnostic.json"
 
 
 @dataclass(frozen=True)
@@ -44,6 +52,27 @@ class MaskCandidate:
     support_count: int = 0
     recurrence_score: float = 0.0
     selection_score: float = 0.0
+
+
+@dataclass(frozen=True)
+class LearningWindowArtifacts:
+    root: Path
+    clip: Path
+    mask: Path
+    raw: Path
+    output_name: str
+
+
+def learning_window_artifacts(film_root: Path, index: int) -> LearningWindowArtifacts:
+    output_name = f"w{index}"
+    root = film_root / LEARNING_DIRECTORY_NAME / output_name
+    return LearningWindowArtifacts(
+        root=root,
+        clip=root / f"{output_name}.mp4",
+        mask=root / f"{output_name}.logo.txt",
+        raw=root / f"{output_name}.logo-raw.csv",
+        output_name=output_name,
+    )
 
 
 FILMS = (
@@ -505,7 +534,7 @@ def parse_comskip_intervals(path: Path) -> list[list[int]]:
 def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
     film_started = time.perf_counter()
     exit_trace = getattr(args, "exit_trace", lambda _stage, **_details: None)
-    film_root = args.output_root / key
+    film_root = args.output_root / getattr(args, "film_dirname", key)
     film_root.mkdir(parents=True, exist_ok=args.resume_incomplete)
     metadata = probe_video(args.ffprobe, video)
     windows = learning_windows(metadata["duration_seconds"], args.window_seconds)
@@ -513,9 +542,10 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
     window_records: list[dict] = []
 
     def process_learning_window(window: LearningWindow) -> tuple[dict, MaskCandidate | None, float]:
-        window_root = film_root / "learning_windows" / f"window_{window.index}"
+        artifacts = learning_window_artifacts(film_root, window.index)
+        window_root = artifacts.root
         window_root.mkdir(parents=True, exist_ok=args.resume_incomplete)
-        clip = window_root / f"window_{window.index}.mp4"
+        clip = artifacts.clip
         extract_command = [
             str(args.ffmpeg), "-hide_banner", "-loglevel", "warning", "-y",
             "-ss", f"{window.start_seconds:.6f}", "-i", str(video),
@@ -523,14 +553,14 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
             "-map", "0:v:0", "-an", "-sn", "-c:v", "copy", "-avoid_negative_ts", "make_zero", str(clip),
         ]
         extract_seconds = 0.0 if clip.is_file() else run_command(extract_command, log_path=window_root / "ffmpeg.log")
-        mask_path = window_root / f"window_{window.index}.logo.txt"
-        raw_path = window_root / f"window_{window.index}.logo-raw.csv"
+        mask_path = artifacts.mask
+        raw_path = artifacts.raw
         if args.resume_incomplete and mask_path.is_file() and raw_path.is_file():
             scan_seconds = 0.0
         else:
             scan_seconds = run_command(
-                comskip_command(args, clip, window_root, f"window_{window.index}", raw=True),
-                log_path=window_root / "comskip-command.log",
+                comskip_command(args, clip, window_root, artifacts.output_name, raw=True),
+                log_path=window_root / "cmd.log",
                 accepted_exit_codes=(0, 1),
             )
         record = {"window": asdict(window), "mask_learned": mask_path.is_file(), "runtime_seconds": extract_seconds + scan_seconds}
@@ -561,17 +591,16 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
     selected, comparisons = select_recurring_candidate(candidates)
     if selected is None:
         diagnostic = {"status": "UNCERTAIN_NO_RECURRING_MASK", "windows": window_records, "comparisons": comparisons}
-        (film_root / "multiwindow_diagnostic.json").write_text(json.dumps(diagnostic, indent=2) + "\n", encoding="utf-8")
+        (film_root / DIAGNOSTIC_NAME).write_text(json.dumps(diagnostic, indent=2) + "\n", encoding="utf-8")
         raise RuntimeError(f"{key}: no recurring Comskip mask; marked uncertain and no random mask was forced")
-    selected_path = film_root / "selected-comskip-logo.txt"
+    selected_path = film_root / SELECTED_MASK_NAME
     shutil.copy2(selected.path, selected_path)
 
-    base = video.stem
-    sensor_root = film_root / "comskip_sensor"
+    sensor_root = film_root / SENSOR_DIRECTORY_NAME
     sensor_root.mkdir(exist_ok=args.resume_incomplete)
-    raw_path = sensor_root / f"{base}.logo-raw.csv"
-    framearray_path = sensor_root / f"{base}.csv"
-    sensor_txt = sensor_root / f"{base}.txt"
+    raw_path = sensor_root / f"{SENSOR_OUTPUT_NAME}.logo-raw.csv"
+    framearray_path = sensor_root / f"{SENSOR_OUTPUT_NAME}.csv"
+    sensor_txt = sensor_root / f"{SENSOR_OUTPUT_NAME}.txt"
     sensor_minimum_mtime_ns = None
     if args.resume_incomplete and raw_path.is_file() and framearray_path.is_file() and sensor_txt.is_file():
         sensor_seconds = 0.0
@@ -582,12 +611,12 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
                 args,
                 video,
                 sensor_root,
-                base,
+                SENSOR_OUTPUT_NAME,
                 logo=selected_path,
                 raw=True,
                 framearray=True,
             ),
-            log_path=sensor_root / "comskip-command.log",
+            log_path=sensor_root / "cmd.log",
             accepted_exit_codes=(0, 1),
         )
     framearray = validate_framearray(
@@ -598,7 +627,7 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
     )
     exit_trace("COMSKIP_FRAMEARRAY_VALIDATED", **framearray)
 
-    internal_sensor_root = film_root / "internal_logo_sensor"
+    internal_sensor_root = film_root / INTERNAL_SENSOR_DIRECTORY_NAME
     logofinder_timeline = internal_sensor_root / "hybrid_logo_timeline.jsonl"
     logofinder_metadata = internal_sensor_root / "hybrid_logo_metadata.json"
     if args.resume_incomplete and logofinder_timeline.is_file() and logofinder_metadata.is_file():
@@ -626,7 +655,7 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
         logofinder_seconds = time.perf_counter() - analysis_started
         exit_trace("INTERNAL_LOGO_SENSOR_END", duration_seconds=logofinder_seconds)
 
-    sidecar = film_root / "hybrid-logo-multiwindow-v1.jsonl"
+    sidecar = film_root / "fusion.jsonl"
     if args.resume_incomplete and sidecar.is_file():
         fusion_seconds = 0.0
     else:
@@ -648,20 +677,20 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
         fusion_seconds = time.perf_counter() - fusion_started
         exit_trace("FUSION_END", duration_seconds=fusion_seconds)
 
-    logo_stage_txt = film_root / f"{base}.logo-stage.txt"
-    logo_stage_csv = film_root / f"{base}.logo-stage.csv"
+    logo_stage_txt = film_root / "logo-stage.txt"
+    logo_stage_csv = film_root / "logo-stage.csv"
     logo_intervals = write_logo_stage(sidecar, logo_stage_txt, logo_stage_csv, selected, metadata["fps"])
 
-    final_root = film_root / "final"
+    final_root = film_root / FINAL_DIRECTORY_NAME
     final_root.mkdir(exist_ok=args.resume_incomplete)
     exit_trace("FINAL_COMSKIP_START")
-    final_log = final_root / "comskip-command.log"
+    final_log = final_root / "cmd.log"
     final_seconds = run_command(
         framearray_rescore_command(
             args,
             framearray_path,
             final_root,
-            base,
+            FINAL_OUTPUT_NAME,
             logo=selected_path,
             sidecar=sidecar,
         ),
@@ -669,16 +698,16 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
         accepted_exit_codes=(0, 1),
     )
     exit_trace("FINAL_COMSKIP_END", duration_seconds=final_seconds)
-    rescore_validation = validate_csv_rescore_log(final_log, final_root / f"{base}.log")
+    rescore_validation = validate_csv_rescore_log(final_log, final_root / f"{FINAL_OUTPUT_NAME}.log")
     exit_trace("FINAL_COMSKIP_CSV_RESCORE_VALIDATED", **rescore_validation)
-    generated_final = final_root / f"{base}.txt"
-    final_stage_txt = film_root / f"{base}.final-stage.txt"
+    generated_final = final_root / f"{FINAL_OUTPUT_NAME}.txt"
+    final_stage_txt = film_root / "final-stage.txt"
     shutil.copy2(generated_final, final_stage_txt)
     final_intervals = parse_comskip_intervals(final_stage_txt)
     exit_trace("FINAL_STAGE_VALIDATED", intervals=final_intervals)
 
-    sight_logo = args.sight_root / f"{base}_LOGO_STAGE.txt"
-    sight_final = args.sight_root / f"{base}_FINAL_STAGE.txt"
+    sight_logo = args.sight_root / "logo-stage.txt"
+    sight_final = args.sight_root / "final-stage.txt"
     shutil.copy2(logo_stage_txt, sight_logo)
     shutil.copy2(final_stage_txt, sight_final)
 
@@ -743,7 +772,7 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
             "sight_final_txt": str(sight_final),
         },
     }
-    (film_root / "multiwindow_diagnostic.json").write_text(
+    (film_root / DIAGNOSTIC_NAME).write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     exit_trace("RUN_FILM_OUTPUT_FILES_CLOSED")

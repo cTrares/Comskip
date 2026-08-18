@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -12,13 +13,23 @@ from pathlib import Path
 from unittest import mock
 
 from comskip_final import (
+    FILM_DIRECTORY_NAME,
+    RUN_DIRECTORY_NAME,
+    ExitTrace,
     application_dir,
     complete_comskip_txt,
     copy_final_outputs,
+    create_run_workspace,
     create_diagnostic_package,
     executable_default,
     main,
     runtime_root,
+)
+from multiwindow_logo_experiment import (
+    DIAGNOSTIC_NAME,
+    FINAL_OUTPUT_NAME,
+    SELECTED_MASK_NAME,
+    learning_window_artifacts,
 )
 
 
@@ -44,6 +55,29 @@ class ComskipFinalTests(unittest.TestCase):
     def test_runtime_root_uses_system_temp(self) -> None:
         self.assertEqual(runtime_root(), Path(tempfile.gettempdir()) / "ComskipFinal")
 
+    def test_multiple_runs_receive_distinct_short_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runs_root = Path(directory) / RUN_DIRECTORY_NAME
+            first_id, first_root = create_run_workspace(runs_root)
+            second_id, second_root = create_run_workspace(runs_root)
+            self.assertRegex(first_id, r"^[0-9a-f]{10}$")
+            self.assertRegex(second_id, r"^[0-9a-f]{10}$")
+            self.assertNotEqual(first_id, second_id)
+            self.assertEqual(first_root, runs_root / first_id)
+            self.assertEqual(second_root, runs_root / second_id)
+
+    def test_learning_outputs_can_be_created_below_short_runtime_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            film_root = Path(directory) / RUN_DIRECTORY_NAME / "a7f31c92d4" / FILM_DIRECTORY_NAME
+            artifacts = learning_window_artifacts(film_root, 1)
+            artifacts.root.mkdir(parents=True)
+            artifacts.mask.write_text("mask", encoding="utf-8")
+            artifacts.raw.write_text("raw", encoding="utf-8")
+            self.assertTrue(artifacts.mask.is_file())
+            self.assertTrue(artifacts.raw.is_file())
+            self.assertEqual(artifacts.mask.name, "w1.logo.txt")
+            self.assertEqual(artifacts.raw.name, "w1.logo-raw.csv")
+
     def test_complete_txt_requires_completion_header(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "result.txt"
@@ -55,32 +89,34 @@ class ComskipFinalTests(unittest.TestCase):
     def test_txt_is_copied_only_after_other_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            video = root / "film.mp4"
+            video = root / "Film mit Leerzeichen und Umlaut Ä.mp4"
             video.write_bytes(b"video")
-            film_root = root / "work" / "film"
+            film_root = root / "work" / FILM_DIRECTORY_NAME
             final_root = film_root / "final"
             final_root.mkdir(parents=True)
-            (final_root / "film.txt").write_text(
+            (final_root / f"{FINAL_OUTPUT_NAME}.txt").write_text(
                 "FILE PROCESSING COMPLETE 100 FRAMES AT 2500\n", encoding="utf-8"
             )
-            (final_root / "film.edl").write_text("1 2 0\n", encoding="utf-8")
-            (film_root / "selected-comskip-logo.txt").write_text("mask\n", encoding="utf-8")
-            (film_root / "multiwindow_diagnostic.json").write_text("{}", encoding="utf-8")
+            (final_root / f"{FINAL_OUTPUT_NAME}.edl").write_text("1 2 0\n", encoding="utf-8")
+            (film_root / SELECTED_MASK_NAME).write_text("mask\n", encoding="utf-8")
+            (film_root / DIAGNOSTIC_NAME).write_text("{}", encoding="utf-8")
             copied = copy_final_outputs(video, film_root, {})
-            self.assertEqual(copied[-1], root / "film.txt")
-            self.assertTrue((root / "film.edl").is_file())
-            self.assertTrue((root / "film.logo.txt").is_file())
-            payload = json.loads((root / "film.comskip-final.json").read_text(encoding="utf-8"))
-            self.assertIn(str(root / "film.txt"), payload["portable_outputs"])
+            self.assertEqual(copied[-1], video.with_suffix(".txt"))
+            self.assertTrue(video.with_suffix(".edl").is_file())
+            self.assertTrue(video.with_name(video.stem + ".logo.txt").is_file())
+            diagnostic = video.with_name(video.stem + ".comskip-final.json")
+            payload = json.loads(diagnostic.read_text(encoding="utf-8"))
+            self.assertIn(str(video.with_suffix(".txt")), payload["portable_outputs"])
 
     def test_diagnostic_package_excludes_video_and_raw_csv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            video = root / "film.mp4"
+            video = root / ("Sehr langer Filmname mit Leerzeichen und Umlaut Ü-" + "x" * 80 + ".mp4")
             video.write_bytes(b"video")
-            work = root / "work"
-            work.mkdir()
-            (work / "command.log").write_text("log", encoding="utf-8")
+            work = root / RUN_DIRECTORY_NAME / "a7f31c92d4"
+            nested = work / FILM_DIRECTORY_NAME / "learn" / "w1"
+            nested.mkdir(parents=True)
+            (nested / "cmd.log").write_text("log", encoding="utf-8")
             (work / "sensor.logo-raw.csv").write_text("large", encoding="utf-8")
             (work / "sensor.csv").write_text("full framearray", encoding="utf-8")
             (work / "hybrid-logo.jsonl").write_text("large", encoding="utf-8")
@@ -88,21 +124,38 @@ class ComskipFinalTests(unittest.TestCase):
             try:
                 raise RuntimeError("boom")
             except RuntimeError as exc:
-                package = create_diagnostic_package(video, work, exc)
+                package = create_diagnostic_package(video, work, exc, run_id="a7f31c92d4")
             with zipfile.ZipFile(package) as archive:
                 names = archive.namelist()
+                failure = json.loads(archive.read("failure.json"))
             self.assertIn("failure.json", names)
-            self.assertIn("command.log", names)
+            self.assertIn("run/learn/w1/cmd.log", names)
             self.assertNotIn("sensor.logo-raw.csv", names)
             self.assertNotIn("sensor.csv", names)
             self.assertNotIn("hybrid-logo.jsonl", names)
             self.assertNotIn("clip.mp4", names)
+            self.assertTrue(package.name.startswith("a7f31c92d4-"))
+            self.assertNotIn(video.stem, package.name)
+            self.assertEqual(failure["video"], str(video))
+            self.assertEqual(failure["run_id"], "a7f31c92d4")
+            self.assertTrue(all(video.stem not in name for name in names))
             package.unlink()
+
+    def test_trace_filename_is_short_but_record_keeps_full_video_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            "comskip_final.runtime_root", return_value=Path(directory)
+        ):
+            video = Path(directory) / ("Langer Film Ä " + "z" * 100 + ".mp4")
+            trace = ExitTrace(video, "a7f31c92d4")
+            record = json.loads(trace.path.read_text(encoding="utf-8").splitlines()[0])
+            self.assertTrue(trace.path.name.startswith("a7f31c92d4-"))
+            self.assertNotIn(video.stem, trace.path.name)
+            self.assertEqual(record["video"], str(video))
 
     def test_successful_main_publishes_txt_last_and_exits_cleanly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            video = root / "film.mp4"
+            video = root / ("Praxistest Film mit Leerzeichen und Umlaut Ö " + "x" * 60 + ".mp4")
             video.write_bytes(b"video")
             components = {}
             for name in ("comskip.exe", "comskip.ini", "ffmpeg.exe", "ffprobe.exe"):
@@ -124,16 +177,19 @@ class ComskipFinalTests(unittest.TestCase):
                 self.assertEqual(stdout, b"pipe-data")
                 self.assertEqual(stderr, b"")
                 self.assertEqual(child.returncode, 0)
-                film_root = run_args.output_root / key
+                self.assertEqual(key, video.stem)
+                self.assertEqual(run_args.film_dirname, FILM_DIRECTORY_NAME)
+                self.assertNotIn(video.stem, str(run_args.output_root))
+                film_root = run_args.output_root / run_args.film_dirname
                 final_root = film_root / "final"
                 final_root.mkdir(parents=True)
-                (final_root / "film.txt").write_text(
+                (final_root / f"{FINAL_OUTPUT_NAME}.txt").write_text(
                     "FILE PROCESSING COMPLETE 100 FRAMES AT 2500\n1 2\n", encoding="utf-8"
                 )
-                (final_root / "film.edl").write_text("1 2 0\n", encoding="utf-8")
-                (final_root / "film.log").write_text("complete\n", encoding="utf-8")
-                (film_root / "selected-comskip-logo.txt").write_text("mask\n", encoding="utf-8")
-                (film_root / "multiwindow_diagnostic.json").write_text("{}", encoding="utf-8")
+                (final_root / f"{FINAL_OUTPUT_NAME}.edl").write_text("1 2 0\n", encoding="utf-8")
+                (final_root / f"{FINAL_OUTPUT_NAME}.log").write_text("complete\n", encoding="utf-8")
+                (film_root / SELECTED_MASK_NAME).write_text("mask\n", encoding="utf-8")
+                (film_root / DIAGNOSTIC_NAME).write_text("{}", encoding="utf-8")
                 run_args.exit_trace("TEST_CHILD_REAPED", pid=child.pid, return_code=child.returncode)
                 return {"final_stage_intervals": [[1, 2]]}
 
@@ -153,13 +209,26 @@ class ComskipFinalTests(unittest.TestCase):
             ), mock.patch("comskip_final.run_film", side_effect=successful_run):
                 self.assertEqual(main(), 0)
 
-            self.assertTrue((root / "film.txt").is_file())
-            self.assertTrue(complete_comskip_txt(root / "film.txt"))
-            self.assertFalse((runtime / "runs").exists())
+            self.assertTrue(video.with_suffix(".txt").is_file())
+            self.assertTrue(complete_comskip_txt(video.with_suffix(".txt")))
+            self.assertTrue(video.with_suffix(".edl").is_file())
+            self.assertTrue(video.with_suffix(".log").is_file())
+            self.assertTrue(video.with_name(video.stem + ".logo.txt").is_file())
+            self.assertFalse((runtime / RUN_DIRECTORY_NAME).exists())
             self.assertTrue(all(process.poll() == 0 for process in child_processes))
             self.assertEqual({thread.ident for thread in threading.enumerate()}, baseline_threads)
-            trace_path = next((runtime / "traces").glob("film-*.jsonl"))
-            stages = [json.loads(line)["stage"] for line in trace_path.read_text(encoding="utf-8").splitlines()]
+            trace_path = next((runtime / "traces").glob("*.jsonl"))
+            self.assertNotIn(video.stem, trace_path.name)
+            records = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(records[0]["video"], str(video.resolve()))
+            self.assertRegex(records[0]["run_id"], r"^[0-9a-f]{10}$")
+            temporary_names = [
+                Path(record["temporary"]).name for record in records if "temporary" in record
+            ]
+            self.assertTrue(temporary_names)
+            self.assertTrue(all(re.match(r"^\.cf-.*\.tmp$", name) for name in temporary_names))
+            self.assertTrue(all(video.stem not in name for name in temporary_names))
+            stages = [record["stage"] for record in records]
             self.assertLess(stages.index("EDL_ATOMIC_REPLACE_END"), stages.index("TXT_ATOMIC_REPLACE_END"))
             self.assertLess(stages.index("LOG_ATOMIC_REPLACE_END"), stages.index("TXT_ATOMIC_REPLACE_END"))
             self.assertLess(stages.index("LOGO_TXT_ATOMIC_REPLACE_END"), stages.index("TXT_ATOMIC_REPLACE_END"))

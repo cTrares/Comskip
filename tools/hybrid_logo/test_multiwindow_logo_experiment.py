@@ -6,11 +6,13 @@ from argparse import Namespace
 from pathlib import Path
 
 from multiwindow_logo_experiment import (
+    LEARNING_DIRECTORY_NAME,
     LEARNING_GUARD_SECONDS,
     LearningWindow,
     MaskCandidate,
     comskip_command,
     framearray_rescore_command,
+    learning_window_artifacts,
     learning_windows,
     parse_mask,
     select_recurring_candidate,
@@ -20,6 +22,21 @@ from multiwindow_logo_experiment import (
 
 
 class MultiwindowLogoExperimentTests(unittest.TestCase):
+    def test_learning_artifact_paths_are_short_and_film_name_independent(self) -> None:
+        runtime = Path(tempfile.gettempdir()) / "ComskipFinal" / "r" / "a7f31c92d4" / "run"
+        artifacts = learning_window_artifacts(runtime, 5)
+        self.assertEqual(artifacts.root, runtime / LEARNING_DIRECTORY_NAME / "w5")
+        self.assertEqual(artifacts.clip.name, "w5.mp4")
+        self.assertEqual(artifacts.mask.name, "w5.logo.txt")
+        self.assertEqual(artifacts.raw.name, "w5.logo-raw.csv")
+        for original_stem in (
+            "film",
+            "Film mit Leerzeichen",
+            "Übermäßig-langer-Filmname-" + "x" * 160,
+            "Extrem-" + "y" * 230,
+        ):
+            self.assertNotIn(original_stem, str(artifacts.root))
+
     def test_sensor_command_requests_full_framearray(self) -> None:
         args = Namespace(comskip=Path("comskip.exe"), ini=Path("comskip.ini"))
         command = comskip_command(
