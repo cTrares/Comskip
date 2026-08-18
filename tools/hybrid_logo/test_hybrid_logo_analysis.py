@@ -9,6 +9,7 @@ from hybrid_logo_analysis import (
     build_timeline,
     exact_transitions,
     frame_grid,
+    unavailable_timeline,
 )
 
 
@@ -47,6 +48,12 @@ class HybridLogoAnalysisTests(unittest.TestCase):
             TimelinePoint(20, 0.8, 0.2, False, "coarse"),
         ]
         self.assertEqual(exact_transitions(points), [])
+
+    def test_unavailable_sensor_emits_neutral_framewise_timeline(self) -> None:
+        points = unavailable_timeline(3, 25.0)
+        self.assertEqual([point.frame for point in points], [0, 1, 2])
+        self.assertTrue(all(point.score == 0.42 for point in points))
+        self.assertTrue(all(point.sample_kind == "frame" for point in points))
 
 
 if __name__ == "__main__":

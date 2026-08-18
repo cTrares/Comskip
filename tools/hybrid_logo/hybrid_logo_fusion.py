@@ -535,6 +535,8 @@ def run(args: argparse.Namespace) -> dict:
 
     aligner = ComskipAligner(comskip_points, args.max_alignment_seconds)
     comskip_reliability, logofinder_reliability = global_reliabilities(comskip_points)
+    if phase1_metadata.get("logofinder", {}).get("status") == "UNAVAILABLE":
+        logofinder_reliability = "UNAVAILABLE_NO_CANDIDATE"
     stabilized_states = stable_states_for_points(logo_points, stabilization.state_changes)
     filtered_scores = nearest_filtered_scores(logo_points, stabilization)
     records = [

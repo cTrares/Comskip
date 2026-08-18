@@ -91,6 +91,7 @@ class HybridLogoFusionTests(unittest.TestCase):
         comskip = ComskipObservation(1, 0.0, 0.8, PRESENT, False, False, 0.1, False)
         self.assertEqual(fusion_state(ABSENT, True, comskip)[0], CONFLICT)
         self.assertEqual(fusion_state(PRESENT, False, comskip)[0], PRESENT)
+        self.assertEqual(fusion_state(UNKNOWN, False, comskip)[0], PRESENT)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -451,21 +452,49 @@ def build_template_mask(reference_gray: np.ndarray) -> np.ndarray:
     return np.ones(reference_gray.shape, dtype=np.uint8) * 255 if int(np.count_nonzero(mask)) < 12 else mask
 
 
-def overlay_present_score(reference: OverlayReference, frame_bgr: np.ndarray) -> float:
-    crop = crop_rect(frame_bgr, reference.overlay.rect)
+def _record_elapsed(timings: dict[str, float] | None, key: str, started: float) -> None:
+    if timings is not None:
+        timings[key] = timings.get(key, 0.0) + time.perf_counter() - started
+
+
+def overlay_present_score_from_crop(
+    reference: OverlayReference,
+    crop: np.ndarray,
+    timings: dict[str, float] | None = None,
+) -> float:
+    """Score an already-cropped BGR ROI with the released sensor calculation."""
     if crop.size == 0:
         return 0.0
-    gray = normalize_gray(crop)
+
+    started = time.perf_counter()
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    _record_elapsed(timings, "cvt_color", started)
+    started = time.perf_counter()
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    _record_elapsed(timings, "blur", started)
+    started = time.perf_counter()
+    gray = cv2.equalizeHist(gray)
+    _record_elapsed(timings, "equalize_hist", started)
     if gray.shape != reference.gray.shape:
+        started = time.perf_counter()
         gray = cv2.resize(gray, (reference.gray.shape[1], reference.gray.shape[0]), interpolation=cv2.INTER_AREA)
+        _record_elapsed(timings, "resize", started)
+    started = time.perf_counter()
     edges = edge_image(gray)
+    _record_elapsed(timings, "canny", started)
     try:
+        started = time.perf_counter()
         edge_score = cv2.matchTemplate(edges, reference.edges, cv2.TM_CCORR_NORMED, mask=reference.edge_mask)
+        _record_elapsed(timings, "edge_correlation", started)
+        started = time.perf_counter()
         gray_score = cv2.matchTemplate(gray, reference.gray, cv2.TM_CCORR_NORMED, mask=reference.template_mask)
+        _record_elapsed(timings, "gray_correlation", started)
     except cv2.error:
         return 0.0
+    started = time.perf_counter()
     edge_value = float(cv2.minMaxLoc(edge_score)[1])
     gray_value = float(cv2.minMaxLoc(gray_score)[1])
+    _record_elapsed(timings, "correlation_minmax", started)
     if not np.isfinite(edge_value):
         edge_value = 0.0
     if not np.isfinite(gray_value):
@@ -473,3 +502,7 @@ def overlay_present_score(reference: OverlayReference, frame_bgr: np.ndarray) ->
     edge_value = max(0.0, min(1.0, edge_value))
     gray_value = max(0.0, min(1.0, gray_value))
     return max(0.0, min(1.0, edge_value * 0.76 + gray_value * 0.24))
+
+
+def overlay_present_score(reference: OverlayReference, frame_bgr: np.ndarray) -> float:
+    return overlay_present_score_from_crop(reference, crop_rect(frame_bgr, reference.overlay.rect))
