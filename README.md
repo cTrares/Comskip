@@ -1,136 +1,260 @@
-## Comskip
+# Comskip – Enhanced Logo Detection Fork
 
-Commercial detector
-http://www.kaashoek.com/comskip/
+This repository is a custom Comskip fork focused on improving commercial detection in **raw, untrimmed TV recordings**.
 
-![Example Comskip image](https://github.com/essandess/etv-comskip/blob/master/example.png)
-*Commercials are marked and skipped using [associated projects](https://github.com/essandess/etv-comskip).*
+The central issue addressed by this fork is not that Comskip's local logo matcher is inherently poor. In testing, the existing edge-based matcher was often very accurate once it had learned the correct station logo.
 
-### Requirements
+The weak point was **logo initialization**.
 
-- FFmpeg with headers and shared libraries (2.4+)
-- libargtable2 for option parsing
-- Optional: SDL for building the Comskip GUI
+Raw TV recordings often begin or end with material that does not belong to the intended program: the end of the previous show, news, trailers, commercials, a different aspect ratio, the same station logo at a different screen position, no station logo at all, or the beginning of the following program.
 
-### Building
+If logo learning is based too heavily on this material, Comskip can initialize the wrong logo model and later make poor commercial decisions even though its local matcher itself is capable of good results.
 
-#### Building from GitHub
+This fork changes that architecture.
 
-Building directly from GitHub also requires GNU autotools (autoconf, automake, and libtool).
+## Main changes
 
-```
-$ git clone git://github.com/erikkaashoek/Comskip
-$ cd Comskip
-$ ./autogen.sh
-$ ./configure
-$ make
-```
+### 1. Six-minute learning exclusion at both ends
 
-#### Building from a tarball
+The **first six minutes** and **last six minutes** of a recording are excluded from station-logo learning.
 
-```
-$ tar zxpfv comskip-<version>.tar.gz
-$ cd comskip-<version>
-$ ./configure
-$ make
+They are **not excluded from commercial detection**.
+
+After logo initialization is complete, the **entire recording from the first frame to the last frame** is analyzed.
+
+```text
+Recording
+|------|--------------------------------------------|------|
+0:00   6:00                                      -6:00   END
+
+       <--------- logo learning allowed --------->
+
+<------------- complete recording analyzed ------------->
 ```
 
-### Setting up a build environment
+This rule is intentional and optimized for raw TV recordings with lead-in and lead-out material.
 
-#### Windows
+### 2. Multi-window Comskip logo learning
 
-There are many ways to setup a build system on Windows.
+Comskip's existing fast edge-mask logo detector is retained.
 
-##### Cross Compile with Ubuntu Bionic (18.04) with MinGW-w64
+Instead of treating one early learning period as authoritative, this fork learns logo candidates from **five separate windows** distributed across the valid middle section of the recording.
 
-```
-$ sudo apt-get install -y subversion curl texinfo g++ bison flex cvs yasm automake libtool autoconf gcc cmake git make pkg-config zlib1g-dev mercurial unzip pax nasm gperf autogen bzip2
-$ git clone https://github.com/erikkaashoek/Comskip.git
-$ cd Comskip
-$ ./cross_compile_comskip.sh
-```
+The candidates are compared and the **recurring logo mask** is selected. The masks are not blindly merged.
 
-##### MSYS2 and MinGW-w64
+The goal is simple: learn the station logo that repeatedly appears across the actual recording, rather than trusting whatever happens to be visible near the beginning.
 
-These instructions use MSYS2 and MinGW-w64, but other environments should also work:
+### 3. Local logo evidence is retained
 
-- Install MSYS2 by following the instructions at https://msys2.github.io/
-- Install the essential build tools: `pacman -S mingw-w64-i686-gcc gcc make autoconf automake libtool pkgconfig yasm`
-- Close the MSYS2 shell and launch a MinGW-w64 shell; this is the shell you'll use for all builds
-- Build FFmpeg (http://ffmpeg.org/), argtable2 (http://argtable.sourceforge.net/) and SDL2 from source and install them to /usr/local
-- Add /usr/local/lib/pkg-config to PKG_CONFIG_PATH (e.g., add `export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:/usr/local/lib/pkgconfig` to ~/.bashrc, then type `source ~/.bashrc`)
+A poor global logo percentage no longer automatically means that all useful local logo information should be discarded.
 
-#### Mac OS X
+Global logo statistics can still be treated as reliability information, but a valid local logo signal remains available to the commercial detector.
 
-First install Xcode (freely available from the Mac OS X App Store). After it's installed, install the Xcode command-line tools by executing `xcode-select --install` from a terminal.
+### 4. Independent second logo sensor
 
-The easiest way to install Comskip's dependencies is via Homebrew (http://brew.sh/):
+This fork contains an additional, independent logo sensor using a different recognition strategy from Comskip's traditional edge-mask detector.
 
-```
-$ brew install autoconf automake libtool pkgconf argtable ffmpeg sdl2
-```
+The additional sensor uses concepts including distributed sampling, stable corner-region detection, edge-frequency / heatmap analysis, reference construction from multiple samples, local similarity / correlation, temporal stabilization and PTS-based alignment.
 
-[Macports](https://www.macports.org/install.php) natively compiles all libraries from source. The project [etv-comskip](https://github.com/essandess/etv-comskip) has an example [Makefile](https://github.com/essandess/etv-comskip/blob/master/Makefile) using Macports tools.
+The purpose of the second sensor is not to replace Comskip's edge matcher, but to provide an independent signal with different failure modes.
 
-```
-$ sudo port install ffmpeg coreutils argtable
-```
+## Relationship to AdFinder
 
-#### Linux
+The additional logo-detection work was informed by a separate private project called **AdFinder**.
 
-##### Ubuntu Xenial (16.04)
+AdFinder has a different purpose: it scans already edited video files to detect commercial breaks that may accidentally have remained after cutting.
 
-```
-$ apt-get install -y autoconf libtool git build-essential libargtable2-dev libavformat-dev libsdl1.2-dev
+**AdFinder itself is not included in this repository, was not modified as part of this work, and is not a runtime dependency of this Comskip fork.**
+
+The functionality required by this fork has its own implementation inside the Comskip project. You do not need AdFinder in order to use this fork.
+
+### 5. Both logo sensors use the same safe learning region
+
+Both logo systems follow the same initialization rule:
+
+```text
+first 6 minutes      -> do not learn
+middle of recording  -> learn
+last 6 minutes       -> do not learn
 ```
 
-##### Ubuntu Vivid (15.04)
+After initialization, both can analyze the complete recording, including the beginning and end.
 
-```
-$ apt-get install -y git build-essential libargtable2-dev libavformat-ffmpeg-dev libsdl1.2-dev
-```
+### 6. Existing Comskip detection remains important
 
-##### Ubuntu Trusty (14.04)
+This is **not** a logo-only commercial detector.
 
-```
-$ add-apt-repository -y ppa:mc3man/trusty-media
-$ apt-get update
+After the improved logo stage, Comskip's existing detection and block-processing logic continues to run, including the mechanisms enabled by the current configuration such as black frames, aspect-ratio changes, resolution changes and existing commercial/block heuristics.
 
-$ apt-get install -y git build-essential libargtable2-dev libsdl1.2-dev
-$ apt-get install -y ffmpeg libva-dev libsoxr-dev libvorbis-dev libbz2-dev zlib1g-dev libxvidcore-dev libvpx-dev libx264-dev libx265-dev libspeex-dev libfdk-aac-dev libvorbisenc2 libopus-dev libmp3lame-dev libdca-dev libfaac-dev libopencore-amrnb-dev libvo-aacenc-dev libopencore-amrwb-dev
+Practical testing showed that this second stage matters. The logo-only intermediate result was not always sufficient, while the final Comskip result was substantially better.
 
-$ git clone https://github.com/foo86/dcadec
-$ cd dcadec
-$ make install
-```
-
-##### Ubuntu Precise (12.04)
-
-```
-$ add-apt-repository -y ppa:pavlyshko/precise
-$ add-apt-repository -y ppa:chris-lea/zeromq
-$ apt-get update
-
-$ wget https://launchpad.net/ubuntu/+archive/primary/+files/libfdk-aac0_0.1.1%2B20130514-2_amd64.deb
-$ wget https://launchpad.net/ubuntu/+archive/primary/+files/libopus0_1.0.1-0ubuntu2_amd64.deb
-$ wget https://launchpadlibrarian.net/205263953/libwebp5_0.4.1-1.2pmo1%7Eprecise_amd64.deb
-$ dpkg -i libfdk-aac0_0.1.1+20130514-2_amd64.deb
-$ dpkg -i libopus0_1.0.1-0ubuntu2_amd64.deb
-$ dpkg -i libwebp5_0.4.1-1.2pmo1~precise_amd64.deb
-
-$ apt-get install -y git build-essential libargtable2-dev libsdl1.2-dev
-$ apt-get install -y ffmpeg-opti libavformat-ffmpeg-opti-dev
+```text
+better logo initialization
+        +
+Comskip edge-based logo detector
+        +
+independent second logo sensor
+        +
+retained local logo evidence
+        +
+existing Comskip detectors and block logic
+        =
+final commercial detection
 ```
 
-### Building static binaries
+## Why this can make a large difference
 
-You can build a static binary by passing the `--enable-static` parameter to `configure`, but beware the following caveats:
+A raw recording may start several minutes before the intended movie. The preceding material can use a different aspect ratio and place the same broadcaster logo at a different vertical position.
 
-- True static linking on Mac OS X is not supported by Apple. Do not use the `--enable-static` directive on OS X. Rather, use the script [matryoshka-name-tool](https://github.com/essandess/matryoshka-name-tool) to use OS X's `install_name_tool` to modify the comskip binary and create a directory of shared libraries that may be distributed to users without homebrew or Macports installations. The project [etv-comskip](https://github.com/essandess/etv-comskip) has an example [Makefile](https://github.com/essandess/etv-comskip/blob/master/Makefile) using matryoshka-name-tool.
+A detector that learns immediately from the beginning can therefore build a perfectly valid model for the **wrong program geometry**.
 
-- Some libraries have incomplete or incorrect dependencies listed in their pkgconfig files. If static linking fails on your system, you'll need to override these by manually specifying the `argtable2_LIBS`, `ffmpeg_LIBS`, and `sdl_LIBS` environment variables with the required list of libraries and their locations.
+The local matcher may not be defective at all. The initialization was wrong.
 
-### Ini file
+This fork changes the question from:
 
-You can find ini files at:
-http://www.kaashoek.com/comskip/
+> What logo do I see near the beginning?
+
+into:
+
+> What station-logo structure repeatedly appears across several independent parts of the recording?
+
+## Practical validation
+
+Development was tested against several real raw TV recordings with different broadcasters, logo positions, aspect ratios and failure modes.
+
+The final implementation was manually inspected in ComskipGUI on:
+
+- American Assassin
+- Freelance
+- One Day as a Lion
+- Der König der Löwen 2 – Simbas Königreich
+- The Hateful Eight
+
+The final-stage output of the completed implementation was manually judged correct on this reference set.
+
+American Assassin was additionally rerun after finalization and reproduced the previously approved final commercial output exactly.
+
+This is practical validation of the intended use case, **not a claim of universal 100% accuracy**.
+
+## Intended use
+
+This fork is primarily intended for **raw / untrimmed television recordings**, especially recordings containing several minutes of material before or after the intended movie or program.
+
+It is particularly useful when the broadcaster keeps a stable station logo during the program and removes it during commercial breaks.
+
+## Assumptions and limitations
+
+The six-minute exclusion is a deliberate domain assumption.
+
+It may be unnecessary or less suitable for:
+
+- very short recordings
+- already precisely trimmed recordings
+- programs with very little usable middle section
+- broadcasters that frequently remove or animate the station logo
+- broadcasts where the logo repeatedly changes position
+- recordings where no stable station logo exists
+
+The current implementation should therefore be understood as an optimization for unattended TV recordings with safety margins before and after the intended program.
+
+## Stable reference version
+
+```text
+branch: custom
+tag:    custom-2026-08-18
+commit: 665316ef0f50b565326171ec70b477461521652c
+```
+
+To restore this exact source revision:
+
+```bash
+git clone <repository-url>
+cd <repository-directory>
+git checkout custom-2026-08-18
+```
+
+or directly:
+
+```bash
+git checkout 665316ef0f50b565326171ec70b477461521652c
+```
+
+The stable tag is the preferred reference.
+
+## Windows executables
+
+The finalized portable build contains:
+
+```text
+comskip.exe
+ComskipGUI.exe
+comskip-final.exe
+```
+
+`comskip-final.exe` contains the runtime required by the internal second logo sensor. It does **not** require the external AdFinder project.
+
+### SHA-256 – finalized build
+
+```text
+comskip.exe
+49BDDC4A9EE48F2629E659E1D25CE5A28B508A42CBE9593CA30E3C72666616D5
+
+ComskipGUI.exe
+53AADCF4BB86EFB83593128B70AC5CA4176E2DB0CF59D25A6B0579FA6E5061A8
+
+comskip-final.exe
+B2AEC3D3F0DD2014E33F1C33B008BE28D41A369DAE3846326D7E6AA4820529FB
+```
+
+## GUI navigation change
+
+```text
+Down Arrow  -> +1 second
+Up Arrow    -> -1 second
+Page Down   -> +20 seconds
+Page Up     -> -20 seconds
+```
+
+The key direction now follows the timeline consistently.
+
+## Reproducible build
+
+The source code for the final implementation is contained in this Comskip repository and does not depend on the external AdFinder repository at runtime.
+
+Before publishing exact fresh-clone build instructions, the build and packaging procedure for `comskip-final.exe` should be documented from the repository's actual build scripts and dependency setup rather than reconstructed from memory.
+
+A reproducible build description should state the exact MSYS build commands, Python version, OpenCV and NumPy requirements, packaging command used for `comskip-final.exe`, and portable deployment steps.
+
+## Development history
+
+The final result was not produced by changing one threshold.
+
+Several hypotheses were tested separately, including commercial-length scoring, preservation of local logo information, independent logo detection, logo-signal fusion and alternative logo initialization strategies.
+
+The largest practical improvement appeared after changing **how the station logo is initialized** and then allowing Comskip's existing detectors to continue refining the result.
+
+```text
+exclude unreliable recording edges from learning
++
+learn from multiple independent windows
++
+retain local logo evidence
++
+use an independent second detector
++
+run the existing Comskip detection logic afterwards
+```
+
+## Relationship to upstream Comskip
+
+This is a custom Comskip fork.
+
+The changes address a specific weakness observed with raw TV recordings where the beginning and end of the file may not represent the intended program.
+
+It should not be interpreted as a claim that every recording, broadcaster or workflow will always perform better than upstream Comskip. Users should compare the results against upstream Comskip on their own source material.
+
+## License and redistribution
+
+This fork remains subject to the applicable license terms of the original Comskip project and any third-party components distributed with the resulting binaries.
+
+Before distributing prebuilt binaries, verify the redistribution requirements for all bundled dependencies used by the final package.
