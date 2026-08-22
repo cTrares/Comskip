@@ -1083,6 +1083,10 @@ Zum Stand dieser Übergabe wurden praktisch erfolgreich getestet:
 - OFFEN + gespeicherte TXT-Änderung + Q bleibt OFFEN und erzeugt keine Entscheidung.
 - C oder M erzeugt anschließend erwartungsgemäß die gewählte Entscheidung.
 
+Neu ergänzte und praktisch bestätigte Bedienregel:
+
+- S überspringt in der normalen Prüfphase nur den aktuellen Film. Es entstehen weder CROP- noch MANUELL-Artefakte, der Film bleibt OFFEN und der Stapel wird mit dem nächsten Film fortgesetzt. Bei einem späteren P-Lauf wird der Film erneut angeboten; zuvor mit W gespeicherte Comskip-TXT-Änderungen bleiben erhalten.
+
 Der Workflow verwendet für neue Analysen `comskip-final.exe` und fällt nur dann auf `comskip.exe` zurück, wenn der finale Launcher nicht vorhanden ist.
 
 Aktueller SHA-256 von `Werbung entfernen.py`:
