@@ -15,6 +15,12 @@ from pathlib import Path
 
 from hybrid_logo_analysis import run as run_internal_logo_analysis
 from hybrid_logo_fusion import run as run_hybrid_logo_fusion
+from wedo_movies_detector import (
+    apply_wedo_movies_intervals,
+    detect_wedo_movies_breaks,
+    extend_wedo_movies_program_hint_tails,
+    write_report as write_wedo_movies_report,
+)
 
 
 LEARNING_GUARD_SECONDS = 6 * 60
@@ -570,6 +576,32 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
     film_root = args.output_root / getattr(args, "film_dirname", key)
     film_root.mkdir(parents=True, exist_ok=args.resume_incomplete)
     metadata = probe_video(args.ffprobe, video)
+    wedo_movies_mode = getattr(args, "wedo_movies_mode", "off")
+    wedo_movies_report = None
+    wedo_movies_error = None
+    wedo_movies_tail_error = None
+    if wedo_movies_mode in ("shadow", "active"):
+        try:
+            exit_trace("WEDO_MOVIES_SCAN_START", mode=wedo_movies_mode)
+            wedo_movies_report = detect_wedo_movies_breaks(
+                video,
+                ffmpeg=args.ffmpeg,
+                duration_seconds=metadata["duration_seconds"],
+            )
+            write_wedo_movies_report(film_root / "wedo-movies-report.json", wedo_movies_report)
+            exit_trace(
+                "WEDO_MOVIES_SCAN_END",
+                status=wedo_movies_report["status"],
+                candidate_count=len(wedo_movies_report["candidates"]),
+            )
+        except Exception as exc:
+            wedo_movies_error = f"{type(exc).__name__}: {exc}"
+            print(
+                "WeDo-Movies-Modul fehlgeschlagen; die normale Comskip-Analyse läuft unverändert weiter: "
+                + wedo_movies_error,
+                flush=True,
+            )
+            exit_trace("WEDO_MOVIES_SCAN_ERROR", error=wedo_movies_error)
     windows = learning_windows(metadata["duration_seconds"], args.window_seconds)
     candidates: list[MaskCandidate] = []
     window_records: list[dict] = []
@@ -718,6 +750,32 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
         fusion_seconds = time.perf_counter() - fusion_started
         exit_trace("FUSION_END", duration_seconds=fusion_seconds)
 
+    if wedo_movies_mode in ("shadow", "active") and wedo_movies_report is not None:
+        try:
+            exit_trace("WEDO_MOVIES_TAIL_EXTENSION_START", max_tail_seconds=180.0)
+            wedo_movies_report = extend_wedo_movies_program_hint_tails(
+                wedo_movies_report,
+                sidecar_path=sidecar,
+                max_tail_seconds=180.0,
+                video_path=video,
+                fps=metadata["fps"],
+                logo_mask_path=selected_path,
+            )
+            write_wedo_movies_report(film_root / "wedo-movies-report.json", wedo_movies_report)
+            exit_trace(
+                "WEDO_MOVIES_TAIL_EXTENSION_END",
+                **wedo_movies_report["tail_extension"],
+            )
+        except Exception as exc:
+            wedo_movies_tail_error = f"{type(exc).__name__}: {exc}"
+            print(
+                "WeDo-Movies-Nachlaufprüfung fehlgeschlagen; "
+                "die sicher erkannten roten Werbeblöcke bleiben erhalten: "
+                + wedo_movies_tail_error,
+                flush=True,
+            )
+            exit_trace("WEDO_MOVIES_TAIL_EXTENSION_ERROR", error=wedo_movies_tail_error)
+
     logo_stage_txt = film_root / "logo-stage.txt"
     logo_stage_csv = film_root / "logo-stage.csv"
     logo_intervals = write_logo_stage(sidecar, logo_stage_txt, logo_stage_csv, selected, metadata["fps"])
@@ -742,6 +800,27 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
     rescore_validation = validate_csv_rescore_log(final_log, final_root / f"{FINAL_OUTPUT_NAME}.log")
     exit_trace("FINAL_COMSKIP_CSV_RESCORE_VALIDATED", **rescore_validation)
     generated_final = final_root / f"{FINAL_OUTPUT_NAME}.txt"
+    wedo_movies_fusion = None
+    if wedo_movies_mode == "active" and wedo_movies_report is not None:
+        try:
+            wedo_movies_fusion = apply_wedo_movies_intervals(
+                txt_path=generated_final,
+                edl_path=final_root / f"{FINAL_OUTPUT_NAME}.edl",
+                report=wedo_movies_report,
+                fps=metadata["fps"],
+            )
+            exit_trace(
+                "WEDO_MOVIES_FUSION_END",
+                fused_intervals=wedo_movies_fusion["fused_intervals"],
+            )
+        except Exception as exc:
+            wedo_movies_error = f"{type(exc).__name__}: {exc}"
+            print(
+                "WeDo-Movies-Ergebnisse konnten nicht übernommen werden; "
+                "das normale Comskip-Ergebnis bleibt erhalten: " + wedo_movies_error,
+                flush=True,
+            )
+            exit_trace("WEDO_MOVIES_FUSION_ERROR", error=wedo_movies_error)
     final_stage_txt = film_root / "final-stage.txt"
     shutil.copy2(generated_final, final_stage_txt)
     final_intervals = parse_comskip_intervals(final_stage_txt)
@@ -788,6 +867,15 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
         "legacy_comskip_would_disable_logo": legacy_would_disable,
         "logo_stage_intervals": logo_intervals,
         "final_stage_intervals": final_intervals,
+        "wedo_movies": {
+            "mode": wedo_movies_mode,
+            "status": wedo_movies_report["status"] if wedo_movies_report else "ERROR" if wedo_movies_error else "OFF",
+            "candidate_count": len(wedo_movies_report["candidates"]) if wedo_movies_report else 0,
+            "report": wedo_movies_report,
+            "fusion": wedo_movies_fusion,
+            "error": wedo_movies_error,
+            "tail_extension_error": wedo_movies_tail_error,
+        },
         "other_detector_change": {
             "added": [interval for interval in final_intervals if interval not in logo_intervals],
             "removed": [interval for interval in logo_intervals if interval not in final_intervals],

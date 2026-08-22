@@ -102,6 +102,16 @@ existing Comskip detectors and block logic
 final commercial detection
 ```
 
+### 7. Optional WeDo Movies module
+
+The portable workflow contains an additional station-specific pass for recordings whose filename contains the exact, case-sensitive token `wedo-movies`.
+
+Only those files use the WeDo Movies module. Every other recording bypasses it and continues through the normal Comskip pipeline unchanged.
+
+For matching recordings, the module detects the stable red WeDo promotional layout, follows the adjoining logo-free trailer material for at most 180 seconds, and ends the commercial block when the normal movie logo is found again. If that logo is recognized late, a conservative lookback of at most 25 seconds may restore the earlier movie start. The correction is accepted only with corroborating WeDo bumper and scene-transition evidence; differences below five seconds are intentionally left unchanged.
+
+The portable workflow also supports selective reanalysis of one previously processed film. Its former analysis and CROP/MANUELL decision are backed up before the new run.
+
 ## Why this can make a large difference
 
 A raw recording may start several minutes before the intended movie. The preceding material can use a different aspect ratio and place the same broadcaster logo at a different vertical position.

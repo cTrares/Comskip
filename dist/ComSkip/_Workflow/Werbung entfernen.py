@@ -16,7 +16,7 @@ try:
 except ImportError:
     winreg = None
 
-BUILD_ID = "2026-08-22-REVIEW-SKIP"
+BUILD_ID = "2026-08-22-SELECTIVE-REANALYSIS-WEDO-TAIL-V3"
 APPROVED_SUFFIX = "_Avidemux.py"
 START_SUFFIX = "_Avidemux_Start.bat"
 CROP_SUFFIX = "_Avidemux_CROP.py"
@@ -36,6 +36,17 @@ ANALYSIS_OUTPUT_SUFFIXES = (
     ".logo.txt",
     ".comskip-final.json",
 )
+
+DECISION_ARTIFACT_SUFFIXES = (
+    CROP_SUFFIX,
+    CROP_START_SUFFIX,
+    MANUAL_SUFFIX,
+    MANUAL_START_SUFFIX,
+    APPROVED_SUFFIX,
+    START_SUFFIX,
+)
+
+REANALYSIS_BACKUP_DIRECTORY = "_Comskip_Reanalyse_Sicherungen"
 
 
 class ReturnToMainMenu(Exception):
@@ -263,6 +274,50 @@ def stop_process_tree(process):
 
 def analysis_output_paths(video):
     return [video.with_name(video.stem + suffix) for suffix in ANALYSIS_OUTPUT_SUFFIXES]
+
+
+def decision_artifact_paths(video):
+    return [video.with_name(video.stem + suffix) for suffix in DECISION_ARTIFACT_SUFFIXES]
+
+
+def stage_reanalysis_artifacts(video):
+    """Move only this film's current analysis/review files into a recoverable backup."""
+    sources = [
+        path
+        for path in (*analysis_output_paths(video), *decision_artifact_paths(video))
+        if path.is_file()
+    ]
+    if not sources:
+        return None, []
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    unique = f"{time.time_ns() % 1_000_000_000:09d}"
+    backup = video.parent / REANALYSIS_BACKUP_DIRECTORY / f"{stamp}-{unique}"
+    backup.mkdir(parents=True)
+    moved = []
+    try:
+        for source in sources:
+            destination = backup / source.name
+            source.replace(destination)
+            moved.append((source, destination))
+    except BaseException:
+        restore_staged_reanalysis_artifacts(backup, moved)
+        raise
+    return backup, moved
+
+
+def restore_staged_reanalysis_artifacts(backup, moved):
+    """Discard partial new results and restore the exact files moved before reanalysis."""
+    for original, staged in reversed(moved):
+        original.unlink(missing_ok=True)
+        if staged.is_file():
+            staged.replace(original)
+    if backup is not None:
+        try:
+            backup.rmdir()
+            backup.parent.rmdir()
+        except OSError:
+            pass
 
 
 def snapshot_analysis_outputs(video):
@@ -736,23 +791,42 @@ def ask_recheck_result(previous):
             print("Bitte C, M oder Q eingeben.")
 
 
-def analyse_video(comskip, video, downloads, idx, total):
+def analyse_video(comskip, video, downloads, idx, total, force=False):
     txt = video.with_suffix(".txt")
-    if is_complete_comskip_txt(txt):
+    if not force and is_complete_comskip_txt(txt):
         print(f"[Analyse {idx}/{total}] vorhanden: {video.name}")
         return True
 
-    output_snapshot = snapshot_analysis_outputs(video)
+    output_snapshot = None
+    reanalysis_backup = None
+    staged_reanalysis_files = []
+    if force:
+        try:
+            reanalysis_backup, staged_reanalysis_files = stage_reanalysis_artifacts(video)
+        except Exception as exc:
+            print(f"FEHLER beim Sichern der bisherigen Dateien für: {video.name}")
+            print(f"{type(exc).__name__}: {exc}")
+            return False
+        if reanalysis_backup is not None:
+            print("Bisherige Analyse und Entscheidung gesichert in:")
+            print(reanalysis_backup)
+    else:
+        output_snapshot = snapshot_analysis_outputs(video)
     try:
         process_result = run_comskip_compact(comskip, video, downloads, idx, total)
     except Exception as exc:
+        if force:
+            restore_staged_reanalysis_artifacts(reanalysis_backup, staged_reanalysis_files)
         print(f"FEHLER bei: {video.name}")
         print(f"{type(exc).__name__}: {exc}")
         print("Der Stapel wird mit dem nächsten Film fortgesetzt.")
         return False
 
     if process_result.aborted:
-        restore_analysis_outputs(output_snapshot)
+        if force:
+            restore_staged_reanalysis_artifacts(reanalysis_backup, staged_reanalysis_files)
+        else:
+            restore_analysis_outputs(output_snapshot)
         print(f"Analyse abgebrochen: {video.name}")
         print("Neue unvollständige Ergebnisse wurden entfernt; vorhandene Benutzerdateien sind wiederhergestellt.")
         print("Rückkehr ins Hauptmenü.")
@@ -772,6 +846,15 @@ def analyse_video(comskip, video, downloads, idx, total):
             print(f"WARNUNG: Keine vollständige Comskip-TXT erzeugt für: {video.name}")
         else:
             print(f"WARNUNG: Comskip-Fehler bei {video.name} | Returncode {returncode}")
+
+    if force and not completed:
+        restore_staged_reanalysis_artifacts(reanalysis_backup, staged_reanalysis_files)
+        print("Neuanalyse nicht vollständig; bisherige Analyse und Entscheidung wurden wiederhergestellt.")
+    elif force:
+        print("Neuanalyse vollständig. Dieser Film ist jetzt wieder OFFEN und muss erneut geprüft werden.")
+        if reanalysis_backup is not None:
+            print("Die vorherige Fassung bleibt wiederherstellbar unter:")
+            print(reanalysis_backup)
 
     if process_result.stop_after_current:
         print("Batch nach aktuellem Film beendet. Rückkehr ins Hauptmenü.")
@@ -814,10 +897,11 @@ def ask_start_mode(videos):
     print("  [N] Nur analysieren")
     print("  [P] Nur offene Filme prüfen / Prüfung fortsetzen")
     print("  [E] Film auswählen / erneut prüfen")
+    print("  [R] Einen Film gezielt neu analysieren")
     print("  [Q] Beenden")
 
     while True:
-        ans = input("Auswahl [A/N/P/E/Q]: ").strip().lower()
+        ans = input("Auswahl [A/N/P/E/R/Q]: ").strip().lower()
         if ans in ("a", "analyse", "analysieren"):
             return "a"
         if ans in ("n", "nur", "nur analysieren"):
@@ -826,9 +910,58 @@ def ask_start_mode(videos):
             return "p"
         if ans in ("e", "erneut", "auswaehlen", "auswählen"):
             return "e"
+        if ans in ("r", "reanalyse", "neu analysieren", "neuanalyse"):
+            return "r"
         if ans in ("q", "quit", "beenden"):
             return "q"
-        print("Bitte A, N, P, E oder Q eingeben.")
+        print("Bitte A, N, P, E, R oder Q eingeben.")
+
+
+def run_reanalysis_menu(comskip, downloads):
+    while True:
+        videos = find_videos(downloads)
+        print()
+        print("Film gezielt neu analysieren")
+        print()
+
+        if not videos:
+            print("Keine MP4-Dateien gefunden.")
+            return
+
+        for idx, video in enumerate(videos, 1):
+            status = decision_kind(video)
+            station = " | WeDo Movies" if "wedo-movies" in video.name else ""
+            print(f"{idx:2d}  [{status:<17}] {video.name}{station}")
+        print()
+        print(" 0  Zurück")
+
+        choice = input("Nummer: ").strip()
+        if choice == "0":
+            return
+        if not choice.isdigit():
+            print("Bitte eine gültige Nummer eingeben.")
+            continue
+
+        selected = int(choice)
+        if selected < 1 or selected > len(videos):
+            print("Bitte eine gültige Nummer eingeben.")
+            continue
+
+        video = videos[selected - 1]
+        print()
+        print("Ausgewählt:", video.name)
+        print("Nur dieser Film wird neu analysiert.")
+        print("Seine bisherige Analyse und CROP-/MANUELL-Entscheidung werden vorher gesichert.")
+        answer = input("Neuanalyse starten [J/N]: ").strip().lower()
+        if answer not in ("j", "ja", "y", "yes"):
+            print("Neuanalyse nicht gestartet.")
+            continue
+
+        completed = analyse_video(comskip, video, downloads, 1, 1, force=True)
+        if completed:
+            print("Die neue Analyse kann anschließend mit [P] geprüft werden.")
+        input("Enter für das Hauptmenü ...")
+        return
 
 
 def report_txt_change(txt, txt_before):
@@ -977,6 +1110,9 @@ def run_session():
             return 0
         if mode == "e":
             run_recheck_menu(comskip, gui, downloads)
+            continue
+        if mode == "r":
+            run_reanalysis_menu(comskip, downloads)
             continue
         break
 

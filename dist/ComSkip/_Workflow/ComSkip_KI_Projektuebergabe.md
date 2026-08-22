@@ -1,6 +1,6 @@
 # ComSkip – KI-Projektübergabe
 
-**Stand:** 18.08.2026 (finalisierter Runtime-Pfad-/Framearray-Stand)
+**Stand:** 22.08.2026 (selektive Neuanalyse und WeDo Movies V3)
 **Repository:** `D:\PythonProjekte\ComSkip Fork`
 **Stabiler Branch:** `custom`
 **Finaler technischer Commit:** `0016b5c1ab989648ca75eac02c54ffd3b6dd1dd0`
@@ -8,10 +8,21 @@
 **Portable Arbeitsumgebung:** `D:\PythonProjekte\ComSkip Fork\dist\ComSkip`
 **`comskip.exe` SHA-256:** `49BDDC4A9EE48F2629E659E1D25CE5A28B508A42CBE9593CA30E3C72666616D5`
 **`ComskipGUI.exe` SHA-256:** `53AADCF4BB86EFB83593128B70AC5CA4176E2DB0CF59D25A6B0579FA6E5061A8`
-**`comskip-final.exe` SHA-256:** `A68009AC279C6A743DBD558EFED9996A13132B32BA29FF2AC672D0F718FF4B2E`
-**Aktuelle `Werbung entfernen.py` SHA-256:** `652B1FE9E96E9792D92E7B536B780260354C86F06ECC9E1BBA9CCE21CE8CCF8E`
-**Python-BUILD_ID:** `2026-08-18-BATCH-ABORT-PROCESS-TREE`
-**Git-Status:** `custom` und `origin/custom` synchron, Working Tree sauber
+**`comskip-final.exe` SHA-256:** `C4D8BFDB156B7C776943AB9FBDB77C324E4477670A0213B51579C404DD5E57DC`
+**Aktuelle `Werbung entfernen.py` SHA-256:** `E8E66B2AD1BA99897E07208CEB85AB7C04F3D6103B384ADED45AC6023393DFC3`
+**Python-BUILD_ID:** `2026-08-22-SELECTIVE-REANALYSIS-WEDO-TAIL-V3`
+**Git-Status:** Lokaler Entwicklungsstand mit Änderungen nach dem stabilen Tag; vor Commit, Tag oder Upload neu verifizieren
+
+---
+
+## AKTUALISIERUNG 22.08.2026 – WEDO MOVIES V3
+
+- Das Spezialmodul wird ausschließlich aktiviert, wenn der Dateiname das exakt und case-sensitive geschriebene Token `wedo-movies` enthält. Alle anderen Filme umgehen diesen Codepfad vollständig und verwenden unverändert die normale Comskip-Analyse.
+- Bei passenden Filmen erkennt das Modul das stabile rote WeDo-Werbeformat und verlängert den Block durch anschließende logo-freie Programmhinweise, höchstens jedoch 180 Sekunden bis zur Rückkehr des normalen Film-Logos.
+- Wird das Film-Logo wegen Wolken, Gräsern oder eines anderen schwierigen Hintergrunds verspätet erkannt, darf die Grenze höchstens 25 Sekunden zurückgesetzt werden. Voraussetzung sind gemeinsam ein mittiger rot/weißer WeDo-Bumper, ein starker Szenenschnitt, ein nicht schwarzes erstes Filmframe und mindestens 0,88 Recall der ausgewählten normalen Logo-Maske.
+- Eine Rücksetzung erfolgt nur ab fünf Sekunden Differenz. Kleinere, vom Benutzer als unkritisch bewertete Verzögerungen bleiben absichtlich unangetastet. Fehlt eine Voraussetzung, bleibt das normale logo-bestätigte Blockende bestehen.
+- Realtest „Rivalen unter roter Sonne“: Die drei kritischen Blockenden wurden exakt auf Frame `82030`, `175675` und `192661` gesetzt; die übrigen acht Blöcke blieben unverändert. 59 automatisierte Tests und der vollständige End-to-End-Lauf endeten erfolgreich mit Returncode 0.
+- Über `R` kann ein beliebiger einzelner Film erneut analysiert werden. Vorher werden seine bestehende Analyse sowie die CROP-/MANUELL-Entscheidung gesichert; andere bereits bearbeitete Filme werden nicht zurückgesetzt.
 
 ---
 

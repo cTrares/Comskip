@@ -31,7 +31,7 @@ code,.code { font-family:Consolas,'Courier New',monospace; }
 <p>
 <span style="font-weight:700;font-family:Calibri;font-size:23.00pt;color:#000000">ComSkip – KI-Projektübergabe</span>
 </p>
-<p>Stand: 18.08.2026 (finalisierter Runtime-Pfad-/Framearray-Stand)</p>
+<p>Stand: 22.08.2026 (selektive Neuanalyse und WeDo Movies V3)</p>
 <p>
 <span style="font-weight:700;font-family:Calibri;font-size:11.00pt">Repository:</span>
 <span style="font-family:Calibri;font-size:11.00pt"> </span>
@@ -71,18 +71,23 @@ code,.code { font-family:Consolas,'Courier New',monospace; }
 <p>
 <span style="font-weight:700;font-family:Calibri;font-size:11.00pt">comskip-final.exe SHA-256:</span>
 <span style="font-family:Calibri;font-size:11.00pt"> </span>
-<span style="font-family:Consolas;font-size:10.00pt">A68009AC279C6A743DBD558EFED9996A13132B32BA29FF2AC672D0F718FF4B2E</span>
+<span style="font-family:Consolas;font-size:10.00pt">C4D8BFDB156B7C776943AB9FBDB77C324E4477670A0213B51579C404DD5E57DC</span>
 </p>
-<p>Aktuelle Werbung entfernen.py SHA-256: 652B1FE9E96E9792D92E7B536B780260354C86F06ECC9E1BBA9CCE21CE8CCF8E</p>
-<p>Python-BUILD_ID: 2026-08-18-BATCH-ABORT-PROCESS-TREE</p>
+<p>Aktuelle Werbung entfernen.py SHA-256: E8E66B2AD1BA99897E07208CEB85AB7C04F3D6103B384ADED45AC6023393DFC3</p>
+<p>Python-BUILD_ID: 2026-08-22-SELECTIVE-REANALYSIS-WEDO-TAIL-V3</p>
 <p>
 <span style="font-weight:700;font-family:Calibri;font-size:11.00pt">Git-Status:</span>
 <span style="font-family:Calibri;font-size:11.00pt"> </span>
-<span style="font-family:Consolas;font-size:10.00pt">custom</span>
-<span style="font-family:Calibri;font-size:11.00pt"> und </span>
-<span style="font-family:Consolas;font-size:10.00pt">origin/custom</span>
-<span style="font-family:Calibri;font-size:11.00pt"> synchron, Working Tree sauber</span>
+<span style="font-family:Calibri;font-size:11.00pt">Lokaler Entwicklungsstand mit Änderungen nach dem stabilen Tag; vor Commit, Tag oder Upload neu verifizieren</span>
 </p>
+<h2>AKTUALISIERUNG 22.08.2026 – WEDO MOVIES V3</h2>
+<ul>
+<li>Das Spezialmodul wird ausschließlich bei Dateinamen mit dem exakten, case-sensitiven Token <code>wedo-movies</code> aktiviert. Alle anderen Filme umgehen diesen Codepfad vollständig.</li>
+<li>Es erkennt das stabile rote WeDo-Werbeformat und verlängert den Block durch nachfolgende logo-freie Programmhinweise, höchstens 180 Sekunden bis zur Rückkehr des normalen Film-Logos.</li>
+<li>Eine verspätete Logoerkennung darf die Grenze höchstens 25 Sekunden zurücksetzen, aber nur mit bestätigtem WeDo-Bumper, starkem Szenenschnitt, nicht schwarzem erstem Filmframe und mindestens 0,88 Recall der normalen Logo-Maske. Korrekturen unter fünf Sekunden bleiben absichtlich unangetastet.</li>
+<li>Realtest: Die drei kritischen Blockenden liegen exakt auf Frame 82030, 175675 und 192661; die übrigen acht Blöcke blieben unverändert. 59 automatisierte Tests und der vollständige End-to-End-Lauf waren erfolgreich.</li>
+<li>Mit <code>R</code> kann genau ein Film neu analysiert werden. Seine bisherige Analyse und CROP-/MANUELL-Entscheidung werden vorher gesichert; andere Filme bleiben unberührt.</li>
+</ul>
 <h2>
 <span style="font-family:Calibri;font-size:13.00pt">ANWEISUNG FÜR EINEN NEUEN KI-ASSISTENTEN</span>
 </h2>

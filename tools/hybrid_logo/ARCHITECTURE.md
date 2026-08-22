@@ -1,5 +1,17 @@
 # Hybrid logo architecture after phase 2A
 
+> **Production update, 2026-08-22:** This document records the earlier phase-2A
+> sensor architecture. The current portable production entry point is
+> `comskip-final.py` / `comskip-final.exe`. It additionally contains the optional
+> WeDo Movies V3 post-processing module. That module is activated only when the
+> filename contains the exact, case-sensitive token `wedo-movies`; all other
+> recordings bypass it. It extends detected red WeDo promotional blocks through
+> the following logo-free trailer material (maximum 180 seconds) and can move a
+> late logo-confirmed movie return back by at most 25 seconds when independent
+> WeDo bumper, scene-cut, non-black-frame, and normal-logo-mask evidence agree.
+> Corrections below five seconds are deliberately not made. The phase-2A text
+> below remains as historical documentation of the underlying sensor design.
+
 ## Scope boundary
 
 The experiment has two independent sensors, a measurement adapter, and an

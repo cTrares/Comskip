@@ -24,7 +24,7 @@ from multiwindow_logo_experiment import (
 )
 
 
-VERSION = "Comskip custom final logo workflow 2026-08-18-puls-fix"
+VERSION = "Comskip custom final logo workflow 2026-08-22-wedo-tail-v3"
 _ACTIVE_TRACE: "ExitTrace | None" = None
 RUN_DIRECTORY_NAME = "r"
 FILM_DIRECTORY_NAME = "run"
@@ -78,6 +78,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ffmpeg", type=Path, default=executable_default("ffmpeg.exe"))
     parser.add_argument("--ffprobe", type=Path, default=executable_default("ffprobe.exe"))
     parser.add_argument("--window-seconds", type=float, default=DEFAULT_WINDOW_SECONDS)
+    parser.add_argument(
+        "--wedo-movies-mode",
+        choices=("off", "shadow", "active"),
+        default="active",
+        help="WeDo Movies special detector mode; ignored for filenames without exact 'wedo-movies'.",
+    )
     parser.add_argument("--keep-work-dir", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--version", action="store_true")
     return parser.parse_args()
@@ -301,6 +307,23 @@ def main() -> int:
         run_id=run_id,
     )
 
+    is_wedo_movies = "wedo-movies" in video.name
+    wedo_movies_mode = args.wedo_movies_mode if is_wedo_movies else "off"
+    if is_wedo_movies:
+        if wedo_movies_mode == "off":
+            print("WeDo Movies erkannt - spezielles WeDo-Movies-Modul ist abgeschaltet.", flush=True)
+        else:
+            print(
+                f"WeDo Movies erkannt - spezielles WeDo-Movies-Modul wird verwendet ({wedo_movies_mode}).",
+                flush=True,
+            )
+    trace.mark(
+        "STATION_PROFILE_SELECTED",
+        station="wedo_movies" if is_wedo_movies else "default",
+        wedo_movies_mode=wedo_movies_mode,
+        filename=video.name,
+    )
+
     run_args = argparse.Namespace(
         output_root=work_root,
         sight_root=work_root / REVIEW_DIRECTORY_NAME,
@@ -311,6 +334,7 @@ def main() -> int:
         ffprobe=args.ffprobe.resolve(),
         window_seconds=args.window_seconds,
         resume_incomplete=False,
+        wedo_movies_mode=wedo_movies_mode,
     )
     exit_code = 0
     try:

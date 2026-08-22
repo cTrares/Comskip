@@ -39,7 +39,14 @@ code,.code { font-family:Consolas,'Courier New',monospace; }
 <span style="font-weight:700">Avidemux</span>
 <span style="font-weight:700">-Regel: </span>Im Copy-Modus Anfang und Ende immer auf Keyframes legen. Lieber einige Sekunden Werbung stehen lassen als zwischen Keyframes schneiden; sonst können deutlich sichtbare Bildfehler entstehen.</p>
 <h1>Finaler stabiler Stand und Logo-Analyse</h1>
-<p>Stabiler Stand: Branch <code>custom</code>, technischer Commit <code>0016b5c1ab989648ca75eac02c54ffd3b6dd1dd0</code>, Tag <code>custom-2026-08-18-4</code>. Der vorherige Tag <code>custom-2026-08-18-3</code> bleibt unverändert. Die praktisch getestete <code>comskip-final.exe</code> hat SHA-256 <code>A68009AC279C6A743DBD558EFED9996A13132B32BA29FF2AC672D0F718FF4B2E</code>.</p>
+<p>Aktueller lokaler Produktionsstand vom 22.08.2026: WeDo Movies V3 und selektive Neuanalyse. Die praktisch getestete <code>comskip-final.exe</code> hat SHA-256 <code>C4D8BFDB156B7C776943AB9FBDB77C324E4477670A0213B51579C404DD5E57DC</code>. Branch <code>custom</code>, Commit <code>0016b5c1ab989648ca75eac02c54ffd3b6dd1dd0</code> und Tag <code>custom-2026-08-18-4</code> bezeichnen den älteren stabilen Referenzstand; die neueren lokalen Änderungen sind darin noch nicht enthalten.</p>
+<h2>WeDo Movies und einzelne Filme neu analysieren</h2>
+<ul>
+<li>Das WeDo-Spezialmodul läuft ausschließlich bei Dateinamen mit dem exakt geschriebenen Bestandteil <code>wedo-movies</code>. Andere Sender und Filme verwenden unverändert die normale Analyse.</li>
+<li>Das Modul erfasst die roten WeDo-Werbeblöcke und die danach folgenden logo-freien Programmhinweise bis zur Rückkehr des normalen Film-Logos, höchstens 180 Sekunden.</li>
+<li>Die Konsole meldet bei einem passenden Film ausdrücklich, dass WeDo Movies erkannt wurde und das Spezialmodul verwendet wird.</li>
+<li>Mit <code>R</code> kann im Workflow genau ein ausgewählter Film neu analysiert werden. Seine bisherige Analyse und CROP-/MANUELL-Entscheidung werden vorher gesichert; alle anderen bereits bearbeiteten Filme bleiben erhalten.</li>
+</ul>
 <ul>
 <li>Den Workflow weiterhin über &quot;Werbung entfernen Start.bat&quot; starten. Das Workflow-Skript verwendet für die Analyse comskip-final.exe.</li>
 <li>Die ersten und letzten 6 Minuten werden von beiden Logosensoren nicht zum Lernen verwendet. Nach dem Lernen wird trotzdem die komplette Aufnahme von Anfang bis Ende analysiert.</li>
