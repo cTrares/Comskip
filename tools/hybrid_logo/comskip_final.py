@@ -24,7 +24,7 @@ from multiwindow_logo_experiment import (
 )
 
 
-VERSION = "Comskip custom final logo workflow 2026-08-22-wedo-tail-v3"
+VERSION = "Comskip custom edge-refiner experiment 2026-08-28-shadow-v1"
 _ACTIVE_TRACE: "ExitTrace | None" = None
 RUN_DIRECTORY_NAME = "r"
 FILM_DIRECTORY_NAME = "run"
@@ -83,6 +83,12 @@ def parse_args() -> argparse.Namespace:
         choices=("off", "shadow", "active"),
         default="active",
         help="WeDo Movies special detector mode; ignored for filenames without exact 'wedo-movies'.",
+    )
+    parser.add_argument(
+        "--commercial-edge-refiner-mode",
+        choices=("off", "shadow", "active"),
+        default="shadow",
+        help="General fixed-position logo return check after final Comskip; shadow never changes cuts.",
     )
     parser.add_argument("--keep-work-dir", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--version", action="store_true")
@@ -308,7 +314,9 @@ def main() -> int:
     )
 
     is_wedo_movies = "wedo-movies" in video.name
-    wedo_movies_mode = args.wedo_movies_mode if is_wedo_movies else "off"
+    requested_wedo_movies_mode = getattr(args, "wedo_movies_mode", "active")
+    wedo_movies_mode = requested_wedo_movies_mode if is_wedo_movies else "off"
+    commercial_edge_refiner_mode = getattr(args, "commercial_edge_refiner_mode", "shadow")
     if is_wedo_movies:
         if wedo_movies_mode == "off":
             print("WeDo Movies erkannt - spezielles WeDo-Movies-Modul ist abgeschaltet.", flush=True)
@@ -321,6 +329,7 @@ def main() -> int:
         "STATION_PROFILE_SELECTED",
         station="wedo_movies" if is_wedo_movies else "default",
         wedo_movies_mode=wedo_movies_mode,
+        commercial_edge_refiner_mode=commercial_edge_refiner_mode,
         filename=video.name,
     )
 
@@ -335,6 +344,7 @@ def main() -> int:
         window_seconds=args.window_seconds,
         resume_incomplete=False,
         wedo_movies_mode=wedo_movies_mode,
+        commercial_edge_refiner_mode=commercial_edge_refiner_mode,
     )
     exit_code = 0
     try:

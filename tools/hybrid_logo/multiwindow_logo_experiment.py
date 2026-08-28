@@ -15,6 +15,11 @@ from pathlib import Path
 
 from hybrid_logo_analysis import run as run_internal_logo_analysis
 from hybrid_logo_fusion import run as run_hybrid_logo_fusion
+from commercial_edge_refiner import (
+    analyze_commercial_edges,
+    apply_commercial_edge_extensions,
+    write_report as write_commercial_edge_report,
+)
 from wedo_movies_detector import (
     apply_wedo_movies_intervals,
     detect_wedo_movies_breaks,
@@ -99,6 +104,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ffmpeg", type=Path, default=Path("ffmpeg"))
     parser.add_argument("--ffprobe", type=Path, default=Path("ffprobe"))
     parser.add_argument("--window-seconds", type=float, default=DEFAULT_WINDOW_SECONDS)
+    parser.add_argument(
+        "--commercial-edge-refiner-mode",
+        choices=("off", "shadow", "active"),
+        default="shadow",
+    )
     parser.add_argument("--resume-incomplete", action="store_true")
     parser.add_argument("--film", choices=[key for key, _video in FILMS], action="append")
     return parser.parse_args()
@@ -577,6 +587,10 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
     film_root.mkdir(parents=True, exist_ok=args.resume_incomplete)
     metadata = probe_video(args.ffprobe, video)
     wedo_movies_mode = getattr(args, "wedo_movies_mode", "off")
+    commercial_edge_refiner_mode = getattr(args, "commercial_edge_refiner_mode", "off")
+    commercial_edge_report = None
+    commercial_edge_application = None
+    commercial_edge_error = None
     wedo_movies_report = None
     wedo_movies_error = None
     wedo_movies_tail_error = None
@@ -821,6 +835,60 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
                 flush=True,
             )
             exit_trace("WEDO_MOVIES_FUSION_ERROR", error=wedo_movies_error)
+
+    if commercial_edge_refiner_mode in ("shadow", "active"):
+        try:
+            exit_trace(
+                "COMMERCIAL_EDGE_REFINER_START",
+                mode=commercial_edge_refiner_mode,
+                video_decode_required=False,
+            )
+            commercial_edge_report = analyze_commercial_edges(
+                txt_path=generated_final,
+                sidecar_path=sidecar,
+                fps=metadata["fps"],
+                max_tail_seconds=180.0,
+                min_extension_seconds=5.0,
+                return_confirmation_seconds=2.0,
+                minimum_absent_fraction=0.80,
+            )
+            write_commercial_edge_report(
+                film_root / "commercial-edge-refiner-report.json",
+                commercial_edge_report,
+            )
+            proposals = commercial_edge_report["proposals"]
+            print(
+                "Allgemeine Werbekanten-Nachpruefung "
+                f"({commercial_edge_refiner_mode}): "
+                + (
+                    f"{len(proposals)} Vorschlag/Vorschlaege"
+                    if proposals
+                    else "keine sichere Aenderung"
+                )
+                + f", Laufzeit {commercial_edge_report['runtime_seconds']:.3f} s.",
+                flush=True,
+            )
+            if commercial_edge_refiner_mode == "active" and proposals:
+                commercial_edge_application = apply_commercial_edge_extensions(
+                    txt_path=generated_final,
+                    edl_path=final_root / f"{FINAL_OUTPUT_NAME}.edl",
+                    report=commercial_edge_report,
+                    fps=metadata["fps"],
+                )
+            exit_trace(
+                "COMMERCIAL_EDGE_REFINER_END",
+                mode=commercial_edge_refiner_mode,
+                proposal_count=len(proposals),
+                runtime_seconds=commercial_edge_report["runtime_seconds"],
+            )
+        except Exception as exc:
+            commercial_edge_error = f"{type(exc).__name__}: {exc}"
+            print(
+                "Allgemeine Werbekanten-Nachpruefung fehlgeschlagen; "
+                "das normale Comskip-Ergebnis bleibt erhalten: " + commercial_edge_error,
+                flush=True,
+            )
+            exit_trace("COMMERCIAL_EDGE_REFINER_ERROR", error=commercial_edge_error)
     final_stage_txt = film_root / "final-stage.txt"
     shutil.copy2(generated_final, final_stage_txt)
     final_intervals = parse_comskip_intervals(final_stage_txt)
@@ -875,6 +943,17 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
             "fusion": wedo_movies_fusion,
             "error": wedo_movies_error,
             "tail_extension_error": wedo_movies_tail_error,
+        },
+        "commercial_edge_refiner": {
+            "mode": commercial_edge_refiner_mode,
+            "status": (
+                commercial_edge_report["status"]
+                if commercial_edge_report is not None
+                else "ERROR" if commercial_edge_error else "OFF"
+            ),
+            "report": commercial_edge_report,
+            "application": commercial_edge_application,
+            "error": commercial_edge_error,
         },
         "other_detector_change": {
             "added": [interval for interval in final_intervals if interval not in logo_intervals],

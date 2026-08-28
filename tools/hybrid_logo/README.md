@@ -56,6 +56,39 @@ the primary detector because logo position and transparency vary with the
 background, while the full promo layout and its duration are substantially
 more stable.
 
+## Experimental general commercial-edge refiner
+
+The branch `feature/general-commercial-edge-refiner` adds a station-neutral
+post-processing pass. It is independent of the WeDo Movies image and layout
+detector. The refiner starts only after an already detected Comskip commercial
+and reads the fixed-position Comskip logo states already present in
+`fusion.jsonl`.
+
+If the normal logo is still absent on the first frame after the detected
+commercial, the refiner searches forward for at most 180 seconds. It proposes
+an extension only when all of the following hold:
+
+- the existing Comskip logo sensor passed its global reliability gate;
+- at least five seconds would be recovered;
+- at least 80 percent of the inspected tail contains fixed-position absence
+  evidence;
+- the normal logo returns at its learned position for at least two seconds;
+- a confirmed return occurs within the search limit.
+
+Logos at other screen positions do not participate in this decision. The pass
+does not decode the video or run either logo matcher again; it streams and
+compacts the existing sidecar. The experimental Portable entry point defaults
+to `--commercial-edge-refiner-mode shadow`, which records proposals in
+`commercial_edge_refiner` inside the normal diagnostic JSON but never changes
+TXT or EDL. `off` bypasses the pass and `active` applies the reported extensions
+atomically while retaining pre-refiner backups in the temporary run directory.
+
+The Scream VI regression fixture expects the interval ending at frame 184124 to
+be proposed for extension through frame 186024, immediately before the stable
+normal-logo return at frame 186025. A full-film synthetic benchmark with
+230,000 padded sidecar observations is available through
+`COMSKIP_RUN_EDGE_REFINER_BENCHMARK=1`.
+
 The second sensor is implemented by `internal_logo_sensor.py` inside this
 repository. Production has no import, path, database, executable, or repository
 dependency on the external LogoFinder project. OpenCV and NumPy are bundled in
