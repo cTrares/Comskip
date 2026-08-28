@@ -24,7 +24,7 @@ from multiwindow_logo_experiment import (
 )
 
 
-VERSION = "Comskip custom edge-refiner experiment 2026-08-28-shadow-v1"
+VERSION = "Comskip V2 2026-08-29 edge-refiner-active"
 _ACTIVE_TRACE: "ExitTrace | None" = None
 RUN_DIRECTORY_NAME = "r"
 FILM_DIRECTORY_NAME = "run"
@@ -87,8 +87,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--commercial-edge-refiner-mode",
         choices=("off", "shadow", "active"),
-        default="shadow",
-        help="General fixed-position logo return check after final Comskip; shadow never changes cuts.",
+        default="active",
+        help="General fixed-position logo return check after final Comskip; active applies confirmed extensions.",
     )
     parser.add_argument("--keep-work-dir", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--version", action="store_true")
@@ -316,7 +316,7 @@ def main() -> int:
     is_wedo_movies = "wedo-movies" in video.name
     requested_wedo_movies_mode = getattr(args, "wedo_movies_mode", "active")
     wedo_movies_mode = requested_wedo_movies_mode if is_wedo_movies else "off"
-    commercial_edge_refiner_mode = getattr(args, "commercial_edge_refiner_mode", "shadow")
+    commercial_edge_refiner_mode = getattr(args, "commercial_edge_refiner_mode", "active")
     if is_wedo_movies:
         if wedo_movies_mode == "off":
             print("WeDo Movies erkannt - spezielles WeDo-Movies-Modul ist abgeschaltet.", flush=True)

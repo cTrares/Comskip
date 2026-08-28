@@ -77,11 +77,10 @@ an extension only when all of the following hold:
 
 Logos at other screen positions do not participate in this decision. The pass
 does not decode the video or run either logo matcher again; it streams and
-compacts the existing sidecar. The experimental Portable entry point defaults
-to `--commercial-edge-refiner-mode shadow`, which records proposals in
-`commercial_edge_refiner` inside the normal diagnostic JSON but never changes
-TXT or EDL. `off` bypasses the pass and `active` applies the reported extensions
-atomically while retaining pre-refiner backups in the temporary run directory.
+compacts the existing sidecar. Comskip V2 defaults to `active`, which applies
+confirmed extensions atomically. `shadow` records the same proposals in
+`commercial_edge_refiner` inside the normal diagnostic JSON without changing
+TXT or EDL, and `off` bypasses the pass.
 
 The Scream VI regression fixture expects the interval ending at frame 184124 to
 be proposed for extension through frame 186024, immediately before the stable

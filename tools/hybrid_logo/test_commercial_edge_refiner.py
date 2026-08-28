@@ -163,7 +163,7 @@ class CommercialEdgeRefinerTests(unittest.TestCase):
             edl = root / "final.edl"
             sidecar = root / "fusion.jsonl"
             self.write_txt(txt, [(177541, 184124)])
-            edl.write_text("7101.640\t7364.960\t0\n", encoding="ascii")
+            edl.write_text("7101.60\t7364.92\t0\n", encoding="ascii")
             self.write_sidecar(sidecar, [(184125, 186024, ABSENT), (186025, 186124, PRESENT)])
             report = analyze_commercial_edges(txt_path=txt, sidecar_path=sidecar, fps=25.0)
 
@@ -175,7 +175,7 @@ class CommercialEdgeRefinerTests(unittest.TestCase):
             )
 
             self.assertIn("177541\t186024", txt.read_text(encoding="ascii"))
-            self.assertIn("7440.960", edl.read_text(encoding="ascii"))
+            self.assertEqual("7101.60\t7440.92\t0\n", edl.read_text(encoding="ascii"))
             self.assertTrue(Path(applied["pre_refiner_txt"]).is_file())
             self.assertTrue(Path(applied["pre_refiner_edl"]).is_file())
 

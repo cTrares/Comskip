@@ -274,7 +274,13 @@ def apply_commercial_edge_extensions(
 
     txt_payload = header + "\n-------------------\n"
     txt_payload += "".join(f"{start}\t{end}\n" for start, end in merged)
-    edl_payload = "".join(f"{start / fps:.3f}\t{end / fps:.3f}\t0\n" for start, end in merged)
+    # Comskip's TXT frame numbers are one-based, while EDL timestamps start at
+    # zero.  Preserve the same mapping and two-decimal formatting as Comskip's
+    # original EDL writer so untouched boundaries remain byte-for-byte stable.
+    edl_payload = "".join(
+        f"{max(start - 1, 0) / fps:.2f}\t{max(end - 1, 0) / fps:.2f}\t0\n"
+        for start, end in merged
+    )
     txt_temporary = txt_path.with_name(txt_path.name + ".edge-refiner.tmp")
     edl_temporary = edl_path.with_name(edl_path.name + ".edge-refiner.tmp")
     try:

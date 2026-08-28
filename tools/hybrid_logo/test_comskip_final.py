@@ -23,6 +23,7 @@ from comskip_final import (
     create_diagnostic_package,
     executable_default,
     main,
+    parse_args,
     runtime_root,
 )
 from multiwindow_logo_experiment import (
@@ -34,6 +35,10 @@ from multiwindow_logo_experiment import (
 
 
 class ComskipFinalTests(unittest.TestCase):
+    def test_v2_defaults_general_edge_refiner_to_active(self) -> None:
+        with mock.patch.object(sys, "argv", ["comskip-final.exe"]):
+            self.assertEqual(parse_args().commercial_edge_refiner_mode, "active")
+
     def test_frozen_application_uses_actual_started_executable_directory(self) -> None:
         executable = Path(r"E:\VideoTools\ComSkip\comskip-final.exe")
         with mock.patch("comskip_final.sys.frozen", True, create=True), mock.patch(
