@@ -24,6 +24,9 @@ geringerer Laufzeit.
 1. Dynamisches Logo je Aufnahme aus über fast die gesamte Laufzeit verteilten
    Lernpunkten bestimmen und danach die gesamte Laufzeit zuerst in einem
    groben, progressiven Raster abdecken. Die Filmmitte ist kein Sonderanker.
+   Falls der interne Heatmap-Lerner keinen Kandidaten findet, werden nur fünf
+   kurze Fenster parallel mit Comskips bewährtem Logo-Lerner geprüft. Der
+   vollständige Comskip-Sensordurchgang bleibt auch dann ausgeschaltet.
 2. Lange stabile Filmblöcke bilden, kurze Logoaussetzer überbrücken und nur
    plausible lange Lücken als Werbung behandeln.
 3. Nur die wenigen gefundenen Blockgrenzen lokal in einem Zwei-Sekunden-Raster

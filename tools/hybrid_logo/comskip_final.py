@@ -500,7 +500,10 @@ def main() -> int:
             result = run_commercial_macro_mode(
                 video=video,
                 film_root=run_args.output_root / run_args.film_dirname,
+                ffmpeg=run_args.ffmpeg,
                 ffprobe=run_args.ffprobe,
+                comskip=run_args.comskip,
+                ini=run_args.ini,
                 channel=macro_mode_channel,
                 config_path=macro_mode_config,
                 time_budget_seconds=float(

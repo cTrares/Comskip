@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import argparse
 import json
+import shutil
 import statistics
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -129,6 +132,160 @@ def learn_macro_overlay(video: Path, metadata: VideoMetadata):
         "learning_range_seconds": [guard, metadata.duration_seconds - guard],
         "typical_distributed_score": typical_score,
     }
+    return capture, score_at_times, typical_score, detail
+
+
+def _reference_from_known_rect(video: Path, metadata: VideoMetadata, rect: tuple[int, int, int, int]):
+    """Build the fast Python scorer after Comskip supplied only the logo rectangle."""
+    from hybrid_logo_analysis import learning_sample_seconds, load_internal_logo_api
+
+    api = load_internal_logo_api()
+    (
+        cv2,
+        np,
+        ProgramOverlay,
+        OverlayReference,
+        _detect_logo_by_heatmap,
+        read_frame_at,
+        crop_rect,
+        normalize_gray,
+        edge_image,
+        build_template_mask,
+        overlay_present_score,
+        _overlay_present_score_from_crop,
+    ) = api
+    guard = min(LEARNING_EDGE_GUARD_SECONDS, metadata.duration_seconds * 0.12)
+    sample_times = learning_sample_seconds(guard, metadata.duration_seconds - guard, 32)
+    # Comskip stores inclusive maximum coordinates; the Python crop uses an
+    # exclusive right/bottom edge.
+    left, top, right, bottom = rect
+    overlay = ProgramOverlay(
+        rect=(left, top, right + 1, bottom + 1),
+        source="comskip-recurring-mask-rect",
+        confidence=1.0,
+        sample_count=len(sample_times),
+    )
+    learning_capture = cv2.VideoCapture(str(video))
+    crops = []
+    try:
+        for seconds in sample_times:
+            frame = read_frame_at(learning_capture, seconds)
+            if frame is None:
+                continue
+            crop = crop_rect(frame, overlay.rect)
+            if crop.size:
+                crops.append(normalize_gray(crop).astype(np.float32))
+    finally:
+        learning_capture.release()
+    if len(crops) < 8:
+        return None, None, None, {"status": "COMSKIP_RECT_REFERENCE_UNAVAILABLE"}
+    reference_gray = np.median(np.stack(crops), axis=0).astype(np.uint8)
+    reference_edges = edge_image(reference_gray)
+    template_mask = build_template_mask(reference_gray)
+    edge_mask = cv2.bitwise_and(
+        cv2.dilate(reference_edges, np.ones((3, 3), np.uint8), iterations=1),
+        template_mask,
+    )
+    if int(np.count_nonzero(edge_mask)) < 12:
+        edge_mask = template_mask
+    reference = OverlayReference(
+        overlay=overlay,
+        gray=reference_gray,
+        edges=reference_edges,
+        edge_mask=edge_mask,
+        template_mask=template_mask,
+    )
+    capture = cv2.VideoCapture(str(video))
+    cache: dict[float, float] = {}
+
+    def score_at_times(times: list[float]) -> dict[float, float]:
+        for seconds in sorted(set(times)):
+            if seconds in cache:
+                continue
+            frame = read_frame_at(capture, seconds)
+            if frame is not None:
+                cache[seconds] = float(overlay_present_score(reference, frame))
+        return {seconds: cache[seconds] for seconds in times if seconds in cache}
+
+    typical_times = learning_sample_seconds(guard, metadata.duration_seconds - guard, 11)
+    typical_values = list(score_at_times(typical_times).values())
+    typical_score = statistics.median(typical_values) if typical_values else None
+    return capture, score_at_times, typical_score, {
+        "status": "COMSKIP_RECT_REFERENCE_LEARNED",
+        "source": overlay.source,
+        "rect_discovered_for_this_recording": list(overlay.rect),
+        "reference_frames": len(crops),
+        "typical_distributed_score": typical_score,
+    }
+
+
+def learn_macro_overlay_via_comskip(
+    *,
+    video: Path,
+    metadata: VideoMetadata,
+    film_root: Path,
+    ffmpeg: Path,
+    comskip: Path,
+    ini: Path,
+):
+    """Use only Comskip's fast multiwindow logo learner, never its full scan."""
+    from multiwindow_logo_experiment import (
+        SELECTED_MASK_NAME,
+        candidate_quality,
+        comskip_command,
+        learning_window_artifacts,
+        learning_windows,
+        parse_mask,
+        run_command,
+        select_recurring_candidate,
+    )
+
+    args = argparse.Namespace(comskip=comskip, ini=ini)
+    windows = learning_windows(metadata.duration_seconds)
+    learning_root = film_root / "macro-comskip-logo"
+
+    def process_window(window):
+        artifacts = learning_window_artifacts(learning_root, window.index)
+        artifacts.root.mkdir(parents=True, exist_ok=True)
+        extract_command = [
+            str(ffmpeg), "-hide_banner", "-loglevel", "warning", "-y",
+            "-ss", f"{window.start_seconds:.6f}", "-i", str(video),
+            "-t", f"{window.end_seconds - window.start_seconds:.6f}",
+            "-map", "0:v:0", "-an", "-sn", "-c:v", "copy",
+            "-avoid_negative_ts", "make_zero", str(artifacts.clip),
+        ]
+        run_command(extract_command, log_path=artifacts.root / "ffmpeg.log")
+        run_command(
+            comskip_command(args, artifacts.clip, artifacts.root, artifacts.output_name, raw=True),
+            log_path=artifacts.root / "cmd.log",
+            accepted_exit_codes=(0, 1),
+        )
+        if not artifacts.mask.is_file() or not artifacts.raw.is_file():
+            return None
+        return parse_mask(artifacts.mask, window, candidate_quality(artifacts.raw))
+
+    with ThreadPoolExecutor(max_workers=len(windows), thread_name_prefix="macro-logo-learn") as executor:
+        candidates = [candidate for candidate in executor.map(process_window, windows) if candidate is not None]
+    selected, comparisons = select_recurring_candidate(candidates)
+    if selected is None:
+        return None, None, None, {
+            "status": "NO_RECURRING_COMSKIP_MASK",
+            "candidate_count": len(candidates),
+            "comparisons": comparisons,
+        }
+    selected_path = film_root / SELECTED_MASK_NAME
+    shutil.copy2(selected.path, selected_path)
+    capture, score_at_times, typical_score, detail = _reference_from_known_rect(
+        video, metadata, selected.bbox
+    )
+    detail.update(
+        {
+            "fallback": "comskip-five-window-logo-learning",
+            "selected_mask": str(selected_path),
+            "support_count": selected.support_count,
+            "candidate_count": len(candidates),
+        }
+    )
     return capture, score_at_times, typical_score, detail
 
 
@@ -367,7 +524,10 @@ def run_commercial_macro_mode(
     *,
     video: Path,
     film_root: Path,
+    ffmpeg: Path,
     ffprobe: Path,
+    comskip: Path,
+    ini: Path,
     channel: str,
     config_path: Path,
     time_budget_seconds: float = DEFAULT_TIME_BUDGET_SECONDS,
@@ -380,7 +540,17 @@ def run_commercial_macro_mode(
     try:
         capture, score_at_times, typical_score, overlay_detail = learn_macro_overlay(video, metadata)
         if score_at_times is None:
-            raise RuntimeError("Makromodus konnte für diese Aufnahme kein stabiles Logo lernen")
+            capture, score_at_times, typical_score, fallback_detail = learn_macro_overlay_via_comskip(
+                video=video,
+                metadata=metadata,
+                film_root=film_root,
+                ffmpeg=ffmpeg,
+                comskip=comskip,
+                ini=ini,
+            )
+            overlay_detail = {"primary": overlay_detail, "selected": fallback_detail}
+        if score_at_times is None:
+            raise RuntimeError("Makromodus konnte mit beiden Lernwegen kein stabiles Logo lernen")
         scores: dict[float, float] = {}
         stage_details = []
         for stage_number, times in enumerate(
