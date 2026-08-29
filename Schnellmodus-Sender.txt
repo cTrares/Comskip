@@ -1,0 +1,52 @@
+# SCHNELLMODUS-SENDER
+#
+# Sender in dieser Liste werden grundsätzlich als werbefrei behandelt.
+# Es findet keine Suche nach Werbeblöcken innerhalb des Films statt.
+# Stattdessen erzeugt der Schnellmodus genau zwei grobe Randblöcke:
+#
+#   1. Erster Aufnahmeframe bis zum vermuteten Filmanfang
+#   2. Vermutetes Filmende bis zum letzten Aufnahmeframe
+#
+# In der Comskip-GUI:
+#
+#   M / N  = Zur vorherigen oder nächsten Blockgrenze springen
+#   E      = Ende des ersten Randblocks am aktuellen Frame setzen
+#   B      = Beginn des letzten Randblocks am aktuellen Frame setzen
+#
+# BEARBEITUNG DIESER LISTE
+#
+# - Ein Sender-Token pro Zeile eintragen.
+# - Groß- und Kleinschreibung spielen keine Rolle.
+# - Leerzeilen werden ignoriert.
+# - Zeilen, die mit # beginnen, sind Kommentare.
+# - Sender hinzufügen: eine neue Zeile ergänzen.
+# - Sender entfernen: die Zeile löschen.
+# - Sender vorübergehend deaktivieren: # vor die Zeile setzen.
+#
+# Der Sender-Token muss dem Senderteil des Dateinamens entsprechen.
+#
+# Beispiele:
+#   ..._arte_hd.mp4       -> arte
+#   ..._zdf_hd.mp4        -> zdf
+#   ..._zdfneo_hd.mp4     -> zdfneo
+#   ..._zdf_neo_hd.mp4    -> zdfneo (Unterstrich-Variante wird erkannt)
+#
+# Fehlt diese Datei, wird der Schnellmodus aus Sicherheitsgründen nicht
+# automatisch aktiviert. Dann läuft die normale vollständige Analyse.
+#
+# AKTIVE SCHNELLMODUS-SENDER:
+
+3sat
+ard
+arte
+br
+one
+hr
+kika
+mdr
+ndr
+rbb
+swr
+wdr
+zdf
+zdfneo

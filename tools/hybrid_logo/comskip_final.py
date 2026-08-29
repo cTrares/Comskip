@@ -22,9 +22,18 @@ from multiwindow_logo_experiment import (
     SELECTED_MASK_NAME,
     run_film,
 )
+from public_broadcaster_fast_mode import (
+    CONFIG_NAME as FAST_MODE_CONFIG_NAME,
+    DEFAULT_TIME_BUDGET_SECONDS,
+    MARKER_NAME as FAST_MODE_MARKER_NAME,
+    PROCESSING_MODE as FAST_PROCESSING_MODE,
+    load_fast_mode_channels,
+    run_public_broadcaster_fast_mode,
+    selected_fast_mode_channel,
+)
 
 
-VERSION = "Comskip V2 2026-08-29 edge-refiner-active"
+VERSION = "Comskip V3 2026-08-29 public-broadcaster-fast-boundary"
 _ACTIVE_TRACE: "ExitTrace | None" = None
 RUN_DIRECTORY_NAME = "r"
 FILM_DIRECTORY_NAME = "run"
@@ -89,6 +98,17 @@ def parse_args() -> argparse.Namespace:
         choices=("off", "shadow", "active"),
         default="active",
         help="General fixed-position logo return check after final Comskip; active applies confirmed extensions.",
+    )
+    parser.add_argument(
+        "--full-analysis",
+        action="store_true",
+        help="Ignore Schnellmodus-Sender.txt for this one recording.",
+    )
+    parser.add_argument(
+        "--fast-mode-time-budget",
+        type=float,
+        default=DEFAULT_TIME_BUDGET_SECONDS,
+        help="Hard target in seconds for the public-broadcaster boundary finder.",
     )
     parser.add_argument("--keep-work-dir", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--version", action="store_true")
@@ -260,6 +280,18 @@ def copy_final_outputs(
         destination = video.with_name(base + ".logo.txt")
         atomic_copy(selected_logo, destination, trace=trace, label="LOGO_TXT")
         copied.append(destination)
+    fast_mode_marker = film_root / FAST_MODE_MARKER_NAME
+    portable_fast_mode_marker = video.with_name(base + ".schnellmodus.txt")
+    if fast_mode_marker.is_file():
+        atomic_copy(
+            fast_mode_marker,
+            portable_fast_mode_marker,
+            trace=trace,
+            label="SCHNELLMODUS_TXT",
+        )
+        copied.append(portable_fast_mode_marker)
+    elif result.get("processing_mode") != FAST_PROCESSING_MODE:
+        portable_fast_mode_marker.unlink(missing_ok=True)
     diagnostic = film_root / DIAGNOSTIC_NAME
     if diagnostic.is_file():
         destination = video.with_name(base + ".comskip-final.json")
@@ -313,6 +345,24 @@ def main() -> int:
         run_id=run_id,
     )
 
+    fast_mode_config = application_dir() / FAST_MODE_CONFIG_NAME
+    try:
+        fast_mode_channels = load_fast_mode_channels(fast_mode_config)
+    except ValueError as exc:
+        print(f"Schnellmodus-Konfiguration ungültig: {exc}", file=sys.stderr)
+        return 2
+    if not fast_mode_config.is_file():
+        print(
+            f"WARNUNG: {FAST_MODE_CONFIG_NAME} fehlt; Schnellmodus ist deaktiviert.",
+            flush=True,
+        )
+    requested_full_analysis = bool(getattr(args, "full_analysis", False))
+    fast_mode_channel = (
+        None
+        if requested_full_analysis
+        else selected_fast_mode_channel(video, fast_mode_channels)
+    )
+
     is_wedo_movies = "wedo-movies" in video.name
     requested_wedo_movies_mode = getattr(args, "wedo_movies_mode", "active")
     wedo_movies_mode = requested_wedo_movies_mode if is_wedo_movies else "off"
@@ -327,9 +377,15 @@ def main() -> int:
             )
     trace.mark(
         "STATION_PROFILE_SELECTED",
-        station="wedo_movies" if is_wedo_movies else "default",
+        station=(
+            f"fast_boundary:{fast_mode_channel}"
+            if fast_mode_channel
+            else "wedo_movies" if is_wedo_movies else "default"
+        ),
         wedo_movies_mode=wedo_movies_mode,
         commercial_edge_refiner_mode=commercial_edge_refiner_mode,
+        fast_mode_channel=fast_mode_channel,
+        fast_mode_config=str(fast_mode_config),
         filename=video.name,
     )
 
@@ -350,10 +406,29 @@ def main() -> int:
     try:
         run_args.output_root.mkdir(parents=True, exist_ok=True)
         run_args.sight_root.mkdir(parents=True)
+        if fast_mode_channel:
+            print("=" * 72, flush=True)
+            print("SCHNELLMODUS AKTIV", flush=True)
+            print(f"Sender: {fast_mode_channel}", flush=True)
+            print("Nur zwei grobe Randblöcke; keine inneren Werbeblöcke.", flush=True)
+            print("=" * 72, flush=True)
         print(f"Comskip final: analysing {video.name}", flush=True)
         trace.mark("RUN_FILM_START", work_root=str(work_root))
         run_args.exit_trace = trace.mark
-        result = run_film(run_args, video.stem, video)
+        if fast_mode_channel:
+            result = run_public_broadcaster_fast_mode(
+                video=video,
+                film_root=run_args.output_root / run_args.film_dirname,
+                ffmpeg=run_args.ffmpeg,
+                ffprobe=run_args.ffprobe,
+                channel=fast_mode_channel,
+                config_path=fast_mode_config,
+                time_budget_seconds=float(
+                    getattr(args, "fast_mode_time_budget", DEFAULT_TIME_BUDGET_SECONDS)
+                ),
+            )
+        else:
+            result = run_film(run_args, video.stem, video)
         trace.mark("RUN_FILM_RETURNED", final_stage=result.get("final_stage_intervals"))
         trace.mark("COPY_FINAL_OUTPUTS_START")
         copied = copy_final_outputs(video, run_args.output_root / FILM_DIRECTORY_NAME, result, trace=trace)

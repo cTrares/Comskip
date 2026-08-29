@@ -16,7 +16,7 @@ try:
 except ImportError:
     winreg = None
 
-BUILD_ID = "2026-08-22-SELECTIVE-REANALYSIS-WEDO-TAIL-V3"
+BUILD_ID = "2026-08-29-COMSKIP-V3-PUBLIC-BROADCASTER-FAST-MODE"
 APPROVED_SUFFIX = "_Avidemux.py"
 START_SUFFIX = "_Avidemux_Start.bat"
 CROP_SUFFIX = "_Avidemux_CROP.py"
@@ -35,6 +35,7 @@ ANALYSIS_OUTPUT_SUFFIXES = (
     ".log",
     ".logo.txt",
     ".comskip-final.json",
+    ".schnellmodus.txt",
 )
 
 DECISION_ARTIFACT_SUFFIXES = (
@@ -411,6 +412,12 @@ def process_has_visible_window(process_id):
 
 def run_comskip_gui(gui, txt, downloads):
     """Startet ComskipGUI und faengt den bekannten Haenger nach Schliessen per X ab."""
+    fast_mode_marker = txt.with_name(txt.stem + ".schnellmodus.txt")
+    if fast_mode_marker.is_file():
+        print("=" * 72)
+        print("SCHNELLMODUS: zwei grobe Randblöcke, keine innere Werbesuche")
+        print("M/N: Blockgrenze wechseln | Filmanfang suchen + E | Filmende suchen + B")
+        print("=" * 72)
     process = subprocess.Popen([str(gui), str(txt)], cwd=str(downloads))
 
     if os.name != "nt":

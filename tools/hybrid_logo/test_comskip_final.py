@@ -35,9 +35,12 @@ from multiwindow_logo_experiment import (
 
 
 class ComskipFinalTests(unittest.TestCase):
-    def test_v2_defaults_general_edge_refiner_to_active(self) -> None:
+    def test_v3_defaults_general_edge_refiner_to_active(self) -> None:
         with mock.patch.object(sys, "argv", ["comskip-final.exe"]):
-            self.assertEqual(parse_args().commercial_edge_refiner_mode, "active")
+            parsed = parse_args()
+            self.assertEqual(parsed.commercial_edge_refiner_mode, "active")
+            self.assertFalse(parsed.full_analysis)
+            self.assertEqual(parsed.fast_mode_time_budget, 55.0)
 
     def test_frozen_application_uses_actual_started_executable_directory(self) -> None:
         executable = Path(r"E:\VideoTools\ComSkip\comskip-final.exe")
@@ -207,6 +210,8 @@ class ComskipFinalTests(unittest.TestCase):
                 window_seconds=120.0,
                 keep_work_dir=False,
                 version=False,
+                full_analysis=True,
+                fast_mode_time_budget=55.0,
             )
             baseline_threads = {thread.ident for thread in threading.enumerate()}
             with mock.patch("comskip_final.parse_args", return_value=parsed), mock.patch(

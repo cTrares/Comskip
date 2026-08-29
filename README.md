@@ -12,6 +12,27 @@ If logo learning is based too heavily on this material, Comskip can initialize t
 
 This fork changes that architecture.
 
+## Comskip V3: fast boundary mode for ad-free public broadcasters
+
+V3 adds a separate, deliberately short path for configured public broadcasters.
+It does not search for commercial blocks inside the programme. It starts from a
+middle anchor, learns any useful overlay dynamically for the current recording
+(without a stored logo position), scans only reduced reference regions at both
+edges and writes exactly two editable blocks:
+
+```text
+frame 1 -> estimated programme start
+estimated programme end -> last frame
+```
+
+The configured stations live in `Schnellmodus-Sender.txt` beside
+`comskip-final.exe`. The file also contains the editing instructions: use M/N to
+jump between boundaries, E to correct the end of the first block and B to
+correct the beginning of the last block. The console, log, diagnostic JSON,
+sidecar marker and ComskipGUI window title identify this mode as
+`SCHNELLMODUS`. If the station file is absent, the automatic fast mode is
+disabled; `--full-analysis` bypasses it for one recording.
+
 ## Main changes
 
 ### 1. Six-minute learning exclusion at both ends

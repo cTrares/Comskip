@@ -9631,6 +9631,21 @@ FILE* LoadSettings(int argc, char ** argv)
     //	if (!loadingTXT)
     LoadIniFile();
 
+    if (loadingTXT)
+    {
+        char fast_mode_filename[MAX_PATH];
+        FILE *fast_mode_file;
+        snprintf(fast_mode_filename, sizeof(fast_mode_filename),
+                 "%s.schnellmodus.txt", inbasename);
+        fast_mode_file = myfopen(fast_mode_filename, "r");
+        if (fast_mode_file)
+        {
+            fclose(fast_mode_file);
+            strcpy(windowtitle, "SCHNELLMODUS - %s");
+            printf("SCHNELLMODUS: reviewing two approximate edge blocks.\n");
+        }
+    }
+
 //	live_tv = true;
 
     time(&ltime);
