@@ -9,7 +9,6 @@ from pathlib import Path
 from public_broadcaster_fast_mode import (
     VideoMetadata,
     frame_for_seconds,
-    learn_dynamic_overlay,
     probe_video,
     selected_fast_mode_channel,
 )
@@ -27,6 +26,7 @@ DEFAULT_BRIDGE_SECONDS = 45.0
 LOCAL_STEP_SECONDS = 2.0
 LOCAL_RADIUS_SECONDS = 40.0
 LOCAL_PERSISTENCE = 3
+LEARNING_EDGE_GUARD_SECONDS = 6.0 * 60.0
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,77 @@ def load_macro_channels(path: Path) -> set[str]:
 
 def selected_macro_channel(video: Path, channels: set[str]) -> str | None:
     return selected_fast_mode_channel(video, channels)
+
+
+def learn_macro_overlay(video: Path, metadata: VideoMetadata):
+    """Learn one recording-local logo from samples spread across the program."""
+    from hybrid_logo_analysis import learn_overlay_in_range, load_internal_logo_api
+
+    api = load_internal_logo_api()
+    (
+        cv2,
+        np,
+        ProgramOverlay,
+        OverlayReference,
+        detect_logo_by_heatmap,
+        read_frame_at,
+        crop_rect,
+        normalize_gray,
+        edge_image,
+        build_template_mask,
+        overlay_present_score,
+        _overlay_present_score_from_crop,
+    ) = api
+    guard = min(LEARNING_EDGE_GUARD_SECONDS, metadata.duration_seconds * 0.12)
+    learned = learn_overlay_in_range(
+        video=video,
+        start_seconds=guard,
+        end_seconds=metadata.duration_seconds - guard,
+        heatmap_samples=48,
+        reference_samples=24,
+        cv2=cv2,
+        np=np,
+        ProgramOverlay=ProgramOverlay,
+        OverlayReference=OverlayReference,
+        detect_logo_by_heatmap=detect_logo_by_heatmap,
+        read_frame_at=read_frame_at,
+        crop_rect=crop_rect,
+        normalize_gray=normalize_gray,
+        edge_image=edge_image,
+        build_template_mask=build_template_mask,
+    )
+    overlay, reference = learned[0], learned[1]
+    if reference is None:
+        return None, None, None, {"status": "NO_DISTRIBUTED_DYNAMIC_OVERLAY"}
+
+    capture = cv2.VideoCapture(str(video))
+    cache: dict[float, float] = {}
+
+    def score_at_times(times: list[float]) -> dict[float, float]:
+        for seconds in sorted(set(times)):
+            if seconds in cache:
+                continue
+            frame = read_frame_at(capture, seconds)
+            if frame is not None:
+                cache[seconds] = float(overlay_present_score(reference, frame))
+        return {seconds: cache[seconds] for seconds in times if seconds in cache}
+
+    reference_times = [
+        guard + (metadata.duration_seconds - 2.0 * guard) * index / 10.0
+        for index in range(11)
+    ]
+    reference_scores = list(score_at_times(reference_times).values())
+    typical_score = statistics.median(reference_scores) if reference_scores else None
+    detail = {
+        "status": "DISTRIBUTED_DYNAMIC_OVERLAY_LEARNED",
+        "source": overlay.source,
+        "rect_discovered_for_this_recording": list(overlay.rect),
+        "confidence": overlay.confidence,
+        "sample_count": overlay.sample_count,
+        "learning_range_seconds": [guard, metadata.duration_seconds - guard],
+        "typical_distributed_score": typical_score,
+    }
+    return capture, score_at_times, typical_score, detail
 
 
 def progressive_sample_stages(duration_seconds: float, sample_seconds: float) -> list[list[float]]:
@@ -307,7 +378,7 @@ def run_commercial_macro_mode(
     metadata = probe_video(ffprobe, video)
     capture = None
     try:
-        capture, score_at_times, central_score, overlay_detail = learn_dynamic_overlay(video, metadata)
+        capture, score_at_times, typical_score, overlay_detail = learn_macro_overlay(video, metadata)
         if score_at_times is None:
             raise RuntimeError("Makromodus konnte für diese Aufnahme kein stabiles Logo lernen")
         scores: dict[float, float] = {}
@@ -369,7 +440,7 @@ def run_commercial_macro_mode(
             "sample_seconds": sample_seconds,
             "present_threshold": DEFAULT_PRESENT_THRESHOLD,
             "dynamic_overlay": overlay_detail,
-            "central_score": central_score,
+            "typical_distributed_score": typical_score,
             "sample_stages": stage_details,
             "samples_measured": len(samples),
             "state_runs": [asdict(run) for run in runs],
