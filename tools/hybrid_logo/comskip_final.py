@@ -31,9 +31,19 @@ from public_broadcaster_fast_mode import (
     run_public_broadcaster_fast_mode,
     selected_fast_mode_channel,
 )
+from commercial_macro_mode import (
+    CONFIG_NAME as MACRO_MODE_CONFIG_NAME,
+    DEFAULT_SAMPLE_SECONDS as DEFAULT_MACRO_SAMPLE_SECONDS,
+    DEFAULT_TIME_BUDGET_SECONDS as DEFAULT_MACRO_TIME_BUDGET_SECONDS,
+    MARKER_NAME as MACRO_MODE_MARKER_NAME,
+    PROCESSING_MODE as MACRO_PROCESSING_MODE,
+    load_macro_channels,
+    run_commercial_macro_mode,
+    selected_macro_channel,
+)
 
 
-VERSION = "Comskip V3 2026-08-29 public-broadcaster-fast-boundary"
+VERSION = "Comskip V4 2026-08-30 commercial-logo-macro"
 _ACTIVE_TRACE: "ExitTrace | None" = None
 RUN_DIRECTORY_NAME = "r"
 FILM_DIRECTORY_NAME = "run"
@@ -102,13 +112,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--full-analysis",
         action="store_true",
-        help="Ignore Schnellmodus-Sender.txt for this one recording.",
+        help="Ignore all fast modes and run the complete legacy analysis for this recording.",
     )
     parser.add_argument(
         "--fast-mode-time-budget",
         type=float,
         default=DEFAULT_TIME_BUDGET_SECONDS,
         help="Hard target in seconds for the public-broadcaster boundary finder.",
+    )
+    parser.add_argument(
+        "--macro-mode",
+        choices=("off", "active"),
+        default="active",
+        help="Commercial logo macro mode; the station list decides where active mode applies.",
+    )
+    parser.add_argument(
+        "--macro-time-budget",
+        type=float,
+        default=DEFAULT_MACRO_TIME_BUDGET_SECONDS,
+        help="Hard target in seconds for the commercial macro mode.",
+    )
+    parser.add_argument(
+        "--macro-sample-seconds",
+        type=float,
+        default=DEFAULT_MACRO_SAMPLE_SECONDS,
+        help="Finest global sampling interval for the commercial macro mode.",
     )
     parser.add_argument("--keep-work-dir", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--version", action="store_true")
@@ -292,6 +320,18 @@ def copy_final_outputs(
         copied.append(portable_fast_mode_marker)
     elif result.get("processing_mode") != FAST_PROCESSING_MODE:
         portable_fast_mode_marker.unlink(missing_ok=True)
+    macro_mode_marker = film_root / MACRO_MODE_MARKER_NAME
+    portable_macro_mode_marker = video.with_name(base + ".makromodus.txt")
+    if macro_mode_marker.is_file():
+        atomic_copy(
+            macro_mode_marker,
+            portable_macro_mode_marker,
+            trace=trace,
+            label="MAKROMODUS_TXT",
+        )
+        copied.append(portable_macro_mode_marker)
+    elif result.get("processing_mode") != MACRO_PROCESSING_MODE:
+        portable_macro_mode_marker.unlink(missing_ok=True)
     diagnostic = film_root / DIAGNOSTIC_NAME
     if diagnostic.is_file():
         destination = video.with_name(base + ".comskip-final.json")
@@ -362,8 +402,27 @@ def main() -> int:
         if requested_full_analysis
         else selected_fast_mode_channel(video, fast_mode_channels)
     )
+    macro_mode_config = application_dir() / MACRO_MODE_CONFIG_NAME
+    try:
+        macro_mode_channels = load_macro_channels(macro_mode_config)
+    except ValueError as exc:
+        print(f"Makromodus-Konfiguration ungültig: {exc}", file=sys.stderr)
+        return 2
+    if not macro_mode_config.is_file():
+        print(
+            f"WARNUNG: {MACRO_MODE_CONFIG_NAME} fehlt; Makromodus ist deaktiviert.",
+            flush=True,
+        )
+    requested_macro_mode = getattr(args, "macro_mode", "active")
+    macro_mode_channel = (
+        None
+        if requested_full_analysis or requested_macro_mode == "off"
+        else selected_macro_channel(video, macro_mode_channels)
+    )
 
     is_wedo_movies = "wedo-movies" in video.name
+    if is_wedo_movies:
+        macro_mode_channel = None
     requested_wedo_movies_mode = getattr(args, "wedo_movies_mode", "active")
     wedo_movies_mode = requested_wedo_movies_mode if is_wedo_movies else "off"
     commercial_edge_refiner_mode = getattr(args, "commercial_edge_refiner_mode", "active")
@@ -380,11 +439,15 @@ def main() -> int:
         station=(
             f"fast_boundary:{fast_mode_channel}"
             if fast_mode_channel
+            else f"commercial_macro:{macro_mode_channel}"
+            if macro_mode_channel
             else "wedo_movies" if is_wedo_movies else "default"
         ),
         wedo_movies_mode=wedo_movies_mode,
         commercial_edge_refiner_mode=commercial_edge_refiner_mode,
         fast_mode_channel=fast_mode_channel,
+        macro_mode_channel=macro_mode_channel,
+        macro_mode_config=str(macro_mode_config),
         fast_mode_config=str(fast_mode_config),
         filename=video.name,
     )
@@ -412,6 +475,12 @@ def main() -> int:
             print(f"Sender: {fast_mode_channel}", flush=True)
             print("Nur zwei grobe Randblöcke; keine inneren Werbeblöcke.", flush=True)
             print("=" * 72, flush=True)
+        elif macro_mode_channel:
+            print("=" * 72, flush=True)
+            print("MAKROMODUS AKTIV", flush=True)
+            print(f"Sender: {macro_mode_channel}", flush=True)
+            print("Dynamisches Logo, grobe Filmblöcke, lokale Kantenprüfung.", flush=True)
+            print("=" * 72, flush=True)
         print(f"Comskip final: analysing {video.name}", flush=True)
         trace.mark("RUN_FILM_START", work_root=str(work_root))
         run_args.exit_trace = trace.mark
@@ -425,6 +494,20 @@ def main() -> int:
                 config_path=fast_mode_config,
                 time_budget_seconds=float(
                     getattr(args, "fast_mode_time_budget", DEFAULT_TIME_BUDGET_SECONDS)
+                ),
+            )
+        elif macro_mode_channel:
+            result = run_commercial_macro_mode(
+                video=video,
+                film_root=run_args.output_root / run_args.film_dirname,
+                ffprobe=run_args.ffprobe,
+                channel=macro_mode_channel,
+                config_path=macro_mode_config,
+                time_budget_seconds=float(
+                    getattr(args, "macro_time_budget", DEFAULT_MACRO_TIME_BUDGET_SECONDS)
+                ),
+                sample_seconds=float(
+                    getattr(args, "macro_sample_seconds", DEFAULT_MACRO_SAMPLE_SECONDS)
                 ),
             )
         else:

@@ -1,0 +1,16 @@
+# Kommerzielle Sender fuer den neuen V4-Logo-Makromodus.
+# Ein Sender-Token pro Zeile, passend zum Dateinamen vor _hd oder _hq.
+# Zeilen entfernen oder ergaenzen, um den Modus pro Sender zu steuern.
+
+comedycentral
+disney-channel
+kabel-1
+nitro
+pro-7
+pro-7-maxx
+rtlzwei
+servustv
+sixx
+super-rtl
+tele-5
+vox

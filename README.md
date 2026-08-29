@@ -1,5 +1,10 @@
 # Comskip – Enhanced Logo Detection Fork
 
+> V4 development branch: commercial recordings listed in
+> `Makromodus-Sender.txt` use the new dynamic-logo macro path. The complete
+> legacy workflow remains available through `--full-analysis`. See
+> `docs/V4_MAKROMODUS_PLAN.md` for the isolated V4 plan.
+
 This repository is a custom Comskip fork focused on improving commercial detection in **raw, untrimmed TV recordings**.
 
 The central issue addressed by this fork is not that Comskip's local logo matcher is inherently poor. In testing, the existing edge-based matcher was often very accurate once it had learned the correct station logo.
