@@ -467,6 +467,7 @@ def run_public_broadcaster_fast_mode(
 ) -> dict:
     started = time.perf_counter()
     deadline = started + time_budget_seconds
+    print("[Phase 2/4] Schnellscanner: Logo lernen und beide Randbereiche prüfen", flush=True)
     metadata = probe_video(ffprobe, video)
     start_duration = min(START_SEARCH_SECONDS, metadata.duration_seconds * 0.45)
     end_offset = max(metadata.duration_seconds * 0.55, metadata.duration_seconds - END_SEARCH_SECONDS)
@@ -505,6 +506,7 @@ def run_public_broadcaster_fast_mode(
     scoring_enabled = deadline - time.perf_counter() >= 8.0
     scorer = score_at_times if scoring_enabled else None
     try:
+        print("[Phase 3/4] Randentscheidung: Filmanfang und Filmende auswählen", flush=True)
         start, start_candidates = choose_boundary_candidate(
             start_intervals,
             side="start",
@@ -540,6 +542,7 @@ def run_public_broadcaster_fast_mode(
         "top_start_candidates": [asdict(item) for item in start_candidates[:5]],
         "top_end_candidates": [asdict(item) for item in end_candidates[:5]],
     }
+    print("[Phase 4/4] Ausgabe: zwei Randblöcke und Schnellmodus-Marker schreiben", flush=True)
     return write_fast_outputs(
         film_root=film_root,
         metadata=metadata,

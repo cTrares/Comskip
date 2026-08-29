@@ -595,6 +595,7 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
     wedo_movies_error = None
     wedo_movies_tail_error = None
     if wedo_movies_mode in ("shadow", "active"):
+        print("[Phase 2/7] WeDo-Movies-Modul: spezielle Unterbrechungen vorscannen", flush=True)
         try:
             exit_trace("WEDO_MOVIES_SCAN_START", mode=wedo_movies_mode)
             wedo_movies_report = detect_wedo_movies_breaks(
@@ -616,6 +617,12 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
                 flush=True,
             )
             exit_trace("WEDO_MOVIES_SCAN_ERROR", error=wedo_movies_error)
+    full_phase_total = 7 if wedo_movies_mode in ("shadow", "active") else 6
+    phase_offset = 1 if full_phase_total == 7 else 0
+    print(
+        f"[Phase {2 + phase_offset}/{full_phase_total}] Comskip-Mehrfenster: Senderlogo lernen",
+        flush=True,
+    )
     windows = learning_windows(metadata["duration_seconds"], args.window_seconds)
     candidates: list[MaskCandidate] = []
     window_records: list[dict] = []
@@ -682,6 +689,10 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
     sensor_txt = sensor_root / f"{SENSOR_OUTPUT_NAME}.txt"
     sensor_log = sensor_root / f"{SENSOR_OUTPUT_NAME}.log"
     sensor_minimum_mtime_ns = None
+    print(
+        f"[Phase {3 + phase_offset}/{full_phase_total}] Comskip-Sensor: vollständige Merkmalsanalyse",
+        flush=True,
+    )
     if (
         args.resume_incomplete
         and raw_path.is_file()
@@ -720,6 +731,10 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
     if args.resume_incomplete and logofinder_timeline.is_file() and logofinder_metadata.is_file():
         logofinder_seconds = 0.0
     else:
+        print(
+            f"[Phase {4 + phase_offset}/{full_phase_total}] LogoFinder: vollständige Logo-Zeitachse",
+            flush=True,
+        )
         analysis_started = time.perf_counter()
         exit_trace("INTERNAL_LOGO_SENSOR_START")
         run_internal_logo_analysis(argparse.Namespace(
@@ -746,6 +761,10 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
     if args.resume_incomplete and sidecar.is_file():
         fusion_seconds = 0.0
     else:
+        print(
+            f"[Phase {5 + phase_offset}/{full_phase_total}] Signalfusion: Logo-Ergebnisse zusammenführen",
+            flush=True,
+        )
         fusion_started = time.perf_counter()
         exit_trace("FUSION_START")
         run_hybrid_logo_fusion(argparse.Namespace(
@@ -796,6 +815,10 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
 
     final_root = film_root / FINAL_DIRECTORY_NAME
     final_root.mkdir(exist_ok=args.resume_incomplete)
+    print(
+        f"[Phase {6 + phase_offset}/{full_phase_total}] Comskip-Ausgabe: Blöcke abschließend bewerten",
+        flush=True,
+    )
     exit_trace("FINAL_COMSKIP_START")
     final_log = final_root / "cmd.log"
     final_seconds = run_command(

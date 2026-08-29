@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import shutil
 import sys
@@ -85,6 +86,18 @@ def executable_default(name: str) -> Path:
         return sibling
     discovered = shutil.which(name)
     return Path(discovered) if discovered else sibling
+
+
+def compact_video_label(video: Path, limit: int = 54) -> str:
+    label = re.sub(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}_", "", video.stem)
+    label = re.sub(r"_[^_]+_(?:hd|hq)$", "", label, flags=re.IGNORECASE)
+    label = label.replace("-", " ").replace("_", " ")
+    label = " ".join(label.split()) or "Aufnahme"
+    return label if len(label) <= limit else label[: limit - 1].rstrip() + "…"
+
+
+def phase(index: int, total: int, module: str, action: str) -> None:
+    print(f"[Phase {index}/{total}] {module}: {action}", flush=True)
 
 
 def parse_args() -> argparse.Namespace:
@@ -475,13 +488,19 @@ def main() -> int:
             print(f"Sender: {fast_mode_channel}", flush=True)
             print("Nur zwei grobe Randblöcke; keine inneren Werbeblöcke.", flush=True)
             print("=" * 72, flush=True)
+            phase(1, 4, "Moduswahl", "öffentlich-rechtlicher Schnellmodus")
         elif macro_mode_channel:
             print("=" * 72, flush=True)
             print("MAKROMODUS AKTIV", flush=True)
             print(f"Sender: {macro_mode_channel}", flush=True)
             print("Dynamisches Logo, grobe Filmblöcke, lokale Kantenprüfung.", flush=True)
             print("=" * 72, flush=True)
-        print(f"Comskip final: analysing {video.name}", flush=True)
+            phase(1, 6, "Moduswahl", "kommerzieller Logo-Makromodus")
+        elif is_wedo_movies:
+            phase(1, 7, "Moduswahl", "WeDo-Movies-Spezialworkflow")
+        else:
+            phase(1, 6, "Moduswahl", "vollständige Comskip-Analyse")
+        print(f"Aufnahme: {compact_video_label(video)}", flush=True)
         trace.mark("RUN_FILM_START", work_root=str(work_root))
         run_args.exit_trace = trace.mark
         if fast_mode_channel:
@@ -519,7 +538,8 @@ def main() -> int:
         trace.mark("COPY_FINAL_OUTPUTS_START")
         copied = copy_final_outputs(video, run_args.output_root / FILM_DIRECTORY_NAME, result, trace=trace)
         trace.mark("COPY_FINAL_OUTPUTS_RETURNED")
-        print("Comskip final: outputs " + ", ".join(path.name for path in copied), flush=True)
+        suffixes = ", ".join(sorted({path.suffix.lower().lstrip(".") or "Datei" for path in copied}))
+        print(f"Comskip final: Ergebnisse geschrieben ({suffixes}).", flush=True)
     except Exception as exc:
         print(f"Comskip final: {exc}", file=sys.stderr)
         trace.mark("MAIN_EXCEPTION", error_type=type(exc).__name__, error=str(exc))

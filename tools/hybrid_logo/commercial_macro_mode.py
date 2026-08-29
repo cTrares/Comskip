@@ -538,8 +538,14 @@ def run_commercial_macro_mode(
     metadata = probe_video(ffprobe, video)
     capture = None
     try:
+        print("[Phase 2/6] LogoFinder: dynamisches Logo über die Aufnahme lernen", flush=True)
         capture, score_at_times, typical_score, overlay_detail = learn_macro_overlay(video, metadata)
         if score_at_times is None:
+            print(
+                "[Phase 2/6] Logo-Lernen: primärer Finder ohne Ergebnis; "
+                "allgemeiner Mehrfenster-Lerner",
+                flush=True,
+            )
             capture, score_at_times, typical_score, fallback_detail = learn_macro_overlay_via_comskip(
                 video=video,
                 metadata=metadata,
@@ -553,6 +559,7 @@ def run_commercial_macro_mode(
             raise RuntimeError("Makromodus konnte mit beiden Lernwegen kein stabiles Logo lernen")
         scores: dict[float, float] = {}
         stage_details = []
+        print("[Phase 3/6] Makroscanner: progressive Logo-Zeitachse aufbauen", flush=True)
         for stage_number, times in enumerate(
             progressive_sample_stages(metadata.duration_seconds, sample_seconds), 1
         ):
@@ -573,12 +580,14 @@ def run_commercial_macro_mode(
             MacroSample(seconds, score, score >= DEFAULT_PRESENT_THRESHOLD)
             for seconds, score in sorted(scores.items())
         ]
+        print("[Phase 4/6] Blockbildung: lange zusammenhängende Filmabschnitte bestimmen", flush=True)
         runs, film_runs = build_film_runs(samples, duration_seconds=metadata.duration_seconds)
         if not film_runs:
             raise RuntimeError("Makromodus fand keinen plausiblen langen Filmblock")
         coarse = intervals_from_film_runs(film_runs, duration_seconds=metadata.duration_seconds)
         refined = []
         refinements = []
+        print("[Phase 5/6] Kantenprüfung: nur gefundene Übergänge lokal nachprüfen", flush=True)
         for start_seconds, end_seconds in coarse:
             start = start_seconds
             end = end_seconds
@@ -618,6 +627,7 @@ def run_commercial_macro_mode(
             "coarse_intervals_seconds": [list(interval) for interval in coarse],
             "refinements": refinements,
         }
+        print("[Phase 6/6] Ausgabe: TXT, EDL, Diagnose und Makromodus-Marker schreiben", flush=True)
         return _write_outputs(
             film_root=film_root,
             metadata=metadata,

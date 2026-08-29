@@ -40,3 +40,9 @@ V4 ausgeführt. Bewertet werden pro Film Laufzeit, Anzahl gefundener Blöcke,
 Blocktreffer und Kantenabweichung gegenüber den gesicherten Schnittmarken.
 Danach folgt genau eine gebündelte Korrekturrunde für die größten systematischen
 Fehler. Die vollständige Analyse läuft nie automatisch als Zeitfalle an.
+
+## Terminalausgabe
+
+Jeder Analyseweg meldet seine aktuelle Phase und das aktive Modul. Während
+einer laufenden Analyse wird nur ein gekürzter Filmtitel wiederholt; der lange
+technische Dateiname bleibt den Auswahllisten und Diagnosedateien vorbehalten.
