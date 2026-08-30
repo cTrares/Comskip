@@ -12,6 +12,7 @@ import threading
 import time
 import traceback
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -27,7 +28,6 @@ from public_broadcaster_fast_mode import (
     CONFIG_NAME as FAST_MODE_CONFIG_NAME,
     DEFAULT_TIME_BUDGET_SECONDS,
     MARKER_NAME as FAST_MODE_MARKER_NAME,
-    PROCESSING_MODE as FAST_PROCESSING_MODE,
     load_fast_mode_channels,
     run_public_broadcaster_fast_mode,
     selected_fast_mode_channel,
@@ -37,19 +37,32 @@ from commercial_macro_mode import (
     DEFAULT_SAMPLE_SECONDS as DEFAULT_MACRO_SAMPLE_SECONDS,
     DEFAULT_TIME_BUDGET_SECONDS as DEFAULT_MACRO_TIME_BUDGET_SECONDS,
     MARKER_NAME as MACRO_MODE_MARKER_NAME,
-    PROCESSING_MODE as MACRO_PROCESSING_MODE,
     load_macro_channels,
     run_commercial_macro_mode,
     selected_macro_channel,
 )
 
 
-VERSION = "Comskip V4 2026-08-30 commercial-logo-macro structural-repair-5"
+VERSION = "Comskip V4 2026-08-30 isolated-profiles structural-repair-6"
 _ACTIVE_TRACE: "ExitTrace | None" = None
 RUN_DIRECTORY_NAME = "r"
 FILM_DIRECTORY_NAME = "run"
 REVIEW_DIRECTORY_NAME = "review"
 RUN_ID_BYTES = 5
+
+PUBLIC_FAST_PROFILE = "public_fast"
+WEDO_MOVIES_PROFILE = "wedo_movies_v3"
+COMMERCIAL_MACRO_PROFILE = "commercial_macro"
+DEFAULT_FULL_PROFILE = "default_full"
+
+
+@dataclass(frozen=True)
+class ProcessingDecision:
+    profile: str
+    fast_mode_channel: str | None
+    macro_mode_channel: str | None
+    wedo_movies_mode: str
+    commercial_edge_refiner_mode: str
 
 
 class ExitTrace:
@@ -125,7 +138,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--full-analysis",
         action="store_true",
-        help="Ignore all fast modes and run the complete legacy analysis for this recording.",
+        help=(
+            "Bypass only the commercial macro mode and run the complete analysis. "
+            "Public-broadcaster and WeDo-Movies profiles remain isolated."
+        ),
     )
     parser.add_argument(
         "--fast-mode-time-budget",
@@ -312,15 +328,19 @@ def copy_final_outputs(
     copied: list[Path] = []
     for suffix in (".edl", ".log"):
         source = final_root / f"{FINAL_OUTPUT_NAME}{suffix}"
+        destination = video.with_suffix(suffix)
         if source.is_file():
-            destination = video.with_suffix(suffix)
             atomic_copy(source, destination, trace=trace, label=suffix[1:].upper())
             copied.append(destination)
+        else:
+            destination.unlink(missing_ok=True)
     selected_logo = film_root / SELECTED_MASK_NAME
+    portable_logo = video.with_name(base + ".logo.txt")
     if selected_logo.is_file():
-        destination = video.with_name(base + ".logo.txt")
-        atomic_copy(selected_logo, destination, trace=trace, label="LOGO_TXT")
-        copied.append(destination)
+        atomic_copy(selected_logo, portable_logo, trace=trace, label="LOGO_TXT")
+        copied.append(portable_logo)
+    else:
+        portable_logo.unlink(missing_ok=True)
     fast_mode_marker = film_root / FAST_MODE_MARKER_NAME
     portable_fast_mode_marker = video.with_name(base + ".schnellmodus.txt")
     if fast_mode_marker.is_file():
@@ -331,7 +351,7 @@ def copy_final_outputs(
             label="SCHNELLMODUS_TXT",
         )
         copied.append(portable_fast_mode_marker)
-    elif result.get("processing_mode") != FAST_PROCESSING_MODE:
+    else:
         portable_fast_mode_marker.unlink(missing_ok=True)
     macro_mode_marker = film_root / MACRO_MODE_MARKER_NAME
     portable_macro_mode_marker = video.with_name(base + ".makromodus.txt")
@@ -343,7 +363,7 @@ def copy_final_outputs(
             label="MAKROMODUS_TXT",
         )
         copied.append(portable_macro_mode_marker)
-    elif result.get("processing_mode") != MACRO_PROCESSING_MODE:
+    else:
         portable_macro_mode_marker.unlink(missing_ok=True)
     review_markers = final_root / "final.review-markers.txt"
     portable_review_markers = video.with_name(base + ".pruefmarker.txt")
@@ -355,21 +375,23 @@ def copy_final_outputs(
             label="PRUEFMARKER_TXT",
         )
         copied.append(portable_review_markers)
-    elif result.get("processing_mode") == MACRO_PROCESSING_MODE:
+    else:
         portable_review_markers.unlink(missing_ok=True)
     diagnostic = film_root / DIAGNOSTIC_NAME
+    portable_diagnostic = video.with_name(base + ".comskip-final.json")
     if diagnostic.is_file():
-        destination = video.with_name(base + ".comskip-final.json")
         payload = json.loads(diagnostic.read_text(encoding="utf-8"))
         planned_txt = video.with_suffix(".txt")
         payload["portable_outputs"] = [str(path) for path in [*copied, planned_txt]]
         atomic_write_text(
-            destination,
+            portable_diagnostic,
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             trace=trace,
             label="DIAGNOSTIC_JSON",
         )
-        copied.append(destination)
+        copied.append(portable_diagnostic)
+    else:
+        portable_diagnostic.unlink(missing_ok=True)
     destination_txt = video.with_suffix(".txt")
     if trace:
         trace.mark("TXT_PUBLISH_PREPARE", destination=str(destination_txt))
@@ -382,6 +404,60 @@ def copy_final_outputs(
 
 def macro_result_is_empty(result: dict) -> bool:
     return not result.get("final_stage_intervals")
+
+
+def select_processing_decision(
+    *,
+    video: Path,
+    fast_mode_channels: set[str],
+    macro_mode_channels: set[str],
+    requested_full_analysis: bool,
+    requested_wedo_movies_mode: str,
+    requested_commercial_edge_refiner_mode: str,
+) -> ProcessingDecision:
+    """Select exactly one profile and its permitted post-processing chain."""
+    if "wedo-movies" in video.name:
+        return ProcessingDecision(
+            profile=WEDO_MOVIES_PROFILE,
+            fast_mode_channel=None,
+            macro_mode_channel=None,
+            wedo_movies_mode=requested_wedo_movies_mode,
+            commercial_edge_refiner_mode="off",
+        )
+
+    fast_mode_channel = selected_fast_mode_channel(video, fast_mode_channels)
+    if fast_mode_channel:
+        return ProcessingDecision(
+            profile=PUBLIC_FAST_PROFILE,
+            fast_mode_channel=fast_mode_channel,
+            macro_mode_channel=None,
+            wedo_movies_mode="off",
+            commercial_edge_refiner_mode="off",
+        )
+
+    macro_mode_channel = (
+        None
+        if requested_full_analysis
+        else selected_macro_channel(video, macro_mode_channels)
+    )
+    if macro_mode_channel:
+        return ProcessingDecision(
+            profile=COMMERCIAL_MACRO_PROFILE,
+            fast_mode_channel=None,
+            macro_mode_channel=macro_mode_channel,
+            wedo_movies_mode="off",
+            # The macro runner itself does not consume this setting. Keep it
+            # for the automatic full-analysis fallback of this commercial file.
+            commercial_edge_refiner_mode=requested_commercial_edge_refiner_mode,
+        )
+
+    return ProcessingDecision(
+        profile=DEFAULT_FULL_PROFILE,
+        fast_mode_channel=None,
+        macro_mode_channel=None,
+        wedo_movies_mode="off",
+        commercial_edge_refiner_mode=requested_commercial_edge_refiner_mode,
+    )
 
 
 def run_automatic_full_analysis_fallback(
@@ -492,12 +568,6 @@ def main() -> int:
             f"WARNUNG: {FAST_MODE_CONFIG_NAME} fehlt; Schnellmodus ist deaktiviert.",
             flush=True,
         )
-    requested_full_analysis = bool(getattr(args, "full_analysis", False))
-    fast_mode_channel = (
-        None
-        if requested_full_analysis
-        else selected_fast_mode_channel(video, fast_mode_channels)
-    )
     macro_mode_config = application_dir() / MACRO_MODE_CONFIG_NAME
     try:
         macro_mode_channels = load_macro_channels(macro_mode_config)
@@ -509,19 +579,25 @@ def main() -> int:
             f"WARNUNG: {MACRO_MODE_CONFIG_NAME} fehlt; Makromodus ist deaktiviert.",
             flush=True,
         )
+    requested_full_analysis = bool(getattr(args, "full_analysis", False))
     requested_macro_mode = getattr(args, "macro_mode", "active")
-    macro_mode_channel = (
-        None
-        if requested_full_analysis or requested_macro_mode == "off"
-        else selected_macro_channel(video, macro_mode_channels)
-    )
-
-    is_wedo_movies = "wedo-movies" in video.name
-    if is_wedo_movies:
-        macro_mode_channel = None
     requested_wedo_movies_mode = getattr(args, "wedo_movies_mode", "active")
-    wedo_movies_mode = requested_wedo_movies_mode if is_wedo_movies else "off"
-    commercial_edge_refiner_mode = getattr(args, "commercial_edge_refiner_mode", "active")
+    requested_commercial_edge_refiner_mode = getattr(
+        args, "commercial_edge_refiner_mode", "active"
+    )
+    decision = select_processing_decision(
+        video=video,
+        fast_mode_channels=fast_mode_channels,
+        macro_mode_channels=(set() if requested_macro_mode == "off" else macro_mode_channels),
+        requested_full_analysis=requested_full_analysis,
+        requested_wedo_movies_mode=requested_wedo_movies_mode,
+        requested_commercial_edge_refiner_mode=requested_commercial_edge_refiner_mode,
+    )
+    fast_mode_channel = decision.fast_mode_channel
+    macro_mode_channel = decision.macro_mode_channel
+    wedo_movies_mode = decision.wedo_movies_mode
+    commercial_edge_refiner_mode = decision.commercial_edge_refiner_mode
+    is_wedo_movies = decision.profile == WEDO_MOVIES_PROFILE
     if is_wedo_movies:
         if wedo_movies_mode == "off":
             print("WeDo Movies erkannt - spezielles WeDo-Movies-Modul ist abgeschaltet.", flush=True)
@@ -532,13 +608,7 @@ def main() -> int:
             )
     trace.mark(
         "STATION_PROFILE_SELECTED",
-        station=(
-            f"fast_boundary:{fast_mode_channel}"
-            if fast_mode_channel
-            else f"commercial_macro:{macro_mode_channel}"
-            if macro_mode_channel
-            else "wedo_movies" if is_wedo_movies else "default"
-        ),
+        station=decision.profile,
         wedo_movies_mode=wedo_movies_mode,
         commercial_edge_refiner_mode=commercial_edge_refiner_mode,
         fast_mode_channel=fast_mode_channel,

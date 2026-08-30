@@ -13,8 +13,12 @@ from pathlib import Path
 from unittest import mock
 
 from comskip_final import (
+    COMMERCIAL_MACRO_PROFILE,
+    DEFAULT_FULL_PROFILE,
     FILM_DIRECTORY_NAME,
+    PUBLIC_FAST_PROFILE,
     RUN_DIRECTORY_NAME,
+    WEDO_MOVIES_PROFILE,
     ExitTrace,
     application_dir,
     complete_comskip_txt,
@@ -27,6 +31,7 @@ from comskip_final import (
     parse_args,
     run_automatic_full_analysis_fallback,
     runtime_root,
+    select_processing_decision,
 )
 from multiwindow_logo_experiment import (
     DIAGNOSTIC_NAME,
@@ -37,6 +42,49 @@ from multiwindow_logo_experiment import (
 
 
 class ComskipFinalTests(unittest.TestCase):
+    def test_processing_profiles_are_exclusive_and_closed(self) -> None:
+        common = {
+            "fast_mode_channels": {"arte"},
+            "macro_mode_channels": {"nitro"},
+            "requested_wedo_movies_mode": "active",
+            "requested_commercial_edge_refiner_mode": "active",
+        }
+        public = select_processing_decision(
+            video=Path("Film_arte_hd.mp4"),
+            requested_full_analysis=True,
+            **common,
+        )
+        self.assertEqual(PUBLIC_FAST_PROFILE, public.profile)
+        self.assertEqual("arte", public.fast_mode_channel)
+        self.assertEqual("off", public.commercial_edge_refiner_mode)
+
+        wedo = select_processing_decision(
+            video=Path("Film_wedo-movies_hd.mp4"),
+            requested_full_analysis=True,
+            **common,
+        )
+        self.assertEqual(WEDO_MOVIES_PROFILE, wedo.profile)
+        self.assertEqual("active", wedo.wedo_movies_mode)
+        self.assertIsNone(wedo.fast_mode_channel)
+        self.assertIsNone(wedo.macro_mode_channel)
+        self.assertEqual("off", wedo.commercial_edge_refiner_mode)
+
+        macro = select_processing_decision(
+            video=Path("Film_nitro_hd.mp4"),
+            requested_full_analysis=False,
+            **common,
+        )
+        self.assertEqual(COMMERCIAL_MACRO_PROFILE, macro.profile)
+        self.assertEqual("nitro", macro.macro_mode_channel)
+
+        forced_full = select_processing_decision(
+            video=Path("Film_nitro_hd.mp4"),
+            requested_full_analysis=True,
+            **common,
+        )
+        self.assertEqual(DEFAULT_FULL_PROFILE, forced_full.profile)
+        self.assertEqual("active", forced_full.commercial_edge_refiner_mode)
+
     def test_empty_macro_result_requires_automatic_full_analysis(self) -> None:
         self.assertTrue(macro_result_is_empty({"final_stage_intervals": []}))
         self.assertFalse(macro_result_is_empty({"final_stage_intervals": [[1, 100]]}))
@@ -170,6 +218,43 @@ class ComskipFinalTests(unittest.TestCase):
             diagnostic = video.with_name(video.stem + ".comskip-final.json")
             payload = json.loads(diagnostic.read_text(encoding="utf-8"))
             self.assertIn(str(video.with_suffix(".txt")), payload["portable_outputs"])
+
+    def test_publication_removes_stale_outputs_from_previous_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = root / "Film_wedo-movies_hd.mp4"
+            video.write_bytes(b"video")
+            for suffix in (
+                ".edl",
+                ".log",
+                ".logo.txt",
+                ".schnellmodus.txt",
+                ".makromodus.txt",
+                ".pruefmarker.txt",
+                ".comskip-final.json",
+            ):
+                video.with_name(video.stem + suffix).write_text("stale", encoding="utf-8")
+
+            film_root = root / "work" / FILM_DIRECTORY_NAME
+            final_root = film_root / "final"
+            final_root.mkdir(parents=True)
+            (final_root / f"{FINAL_OUTPUT_NAME}.txt").write_text(
+                "FILE PROCESSING COMPLETE 100 FRAMES AT 2500\n", encoding="utf-8"
+            )
+
+            copy_final_outputs(video, film_root, {"processing_mode": "wedo_movies_v3"})
+
+            self.assertTrue(video.with_suffix(".txt").is_file())
+            for suffix in (
+                ".edl",
+                ".log",
+                ".logo.txt",
+                ".schnellmodus.txt",
+                ".makromodus.txt",
+                ".pruefmarker.txt",
+                ".comskip-final.json",
+            ):
+                self.assertFalse(video.with_name(video.stem + suffix).exists(), suffix)
 
     def test_diagnostic_package_excludes_video_and_raw_csv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
