@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import queue
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -31,10 +32,6 @@ COMSKIP_PROGRESS_RE = re.compile(
 )
 
 PHASE_RE = re.compile(r"^\[Phase\s+(\d+)/(\d+)\]", re.IGNORECASE)
-TIMESTAMP_PREFIX_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-(?:\d{2}-)?", re.IGNORECASE
-)
-RECORDING_SUFFIX_RE = re.compile(r"_[^_]+_(?:hd|hq)$", re.IGNORECASE)
 
 ANSI_BRIGHT_GREEN = "\x1b[92m"
 ANSI_BLUE = "\x1b[94m"
@@ -105,12 +102,26 @@ def colour(text, ansi_code):
     return text
 
 
-def compact_video_label(video_name):
-    label = Path(video_name).stem
-    label = TIMESTAMP_PREFIX_RE.sub("", label)
-    label = RECORDING_SUFFIX_RE.sub("", label)
-    label = label.replace("_", " ").replace("-", " ")
-    return re.sub(r"\s+", " ", label).strip() or Path(video_name).stem
+def display_video_name(video_name):
+    """Return the real file name without normalising any characters."""
+    return Path(video_name).name
+
+
+def replace_status_line(text):
+    """Replace one live terminal line; keep full lines when output is redirected."""
+    if not getattr(sys.stdout, "isatty", lambda: False)():
+        print(text)
+        return False
+
+    width = max(20, shutil.get_terminal_size((120, 24)).columns - 1)
+    visible = text if len(text) <= width else text[: max(1, width - 1)] + "…"
+    print(f"\r\x1b[2K{visible}", end="", flush=True)
+    return True
+
+
+def clear_status_line(active):
+    if active:
+        print("\r\x1b[2K", end="", flush=True)
 
 
 def decode_child_output(raw_line):
@@ -547,7 +558,8 @@ def run_analysis_command(command, cwd, index, total, video_name, key_reader=poll
     process = None
     reader = None
     lines = queue.Queue()
-    last_phase = None
+    last_phase_line = None
+    phase_line_active = False
     stop_after_current = False
     aborted = False
 
@@ -555,7 +567,7 @@ def run_analysis_command(command, cwd, index, total, video_name, key_reader=poll
     if os.name == "nt":
         creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
 
-    label = compact_video_label(video_name)
+    label = display_video_name(video_name)
     print(colour(f"[{index}/{total}] START  {label}", ANSI_BRIGHT_GREEN))
 
     child_environment = os.environ.copy()
@@ -597,22 +609,28 @@ def run_analysis_command(command, cwd, index, total, video_name, key_reader=poll
                 line = decode_child_output(raw_line).rstrip("\r\n")
                 phase_match = PHASE_RE.match(line)
                 if phase_match:
-                    phase = (int(phase_match.group(1)), int(phase_match.group(2)))
-                    if phase == last_phase:
+                    if line == last_phase_line:
                         continue
-                    last_phase = phase
-                    print(f"[Phase {phase[0]}/{phase[1]}]")
+                    last_phase_line = line
+                    phase_line_active = replace_status_line(line)
                     continue
                 if line.upper().startswith(("WARNUNG", "FEHLER")):
+                    clear_status_line(phase_line_active)
+                    phase_line_active = False
+                    last_phase_line = None
                     print(line)
 
             key = key_reader()
             if key == "b" and not stop_after_current:
+                clear_status_line(phase_line_active)
+                phase_line_active = False
                 stop_after_current = True
                 print("Batch-Stopp angefordert.")
                 print("Aktueller Film wird noch fertig analysiert.")
                 print("Danach Rückkehr ins Hauptmenü.")
             elif key == "x":
+                clear_status_line(phase_line_active)
+                phase_line_active = False
                 aborted = True
                 print("Sofortabbruch angefordert. Analyseprozessbaum wird beendet.")
                 stop_process_tree(process)
@@ -621,6 +639,8 @@ def run_analysis_command(command, cwd, index, total, video_name, key_reader=poll
 
         returncode = process.wait()
         elapsed = format_elapsed(time.monotonic() - started)
+        clear_status_line(phase_line_active)
+        phase_line_active = False
         if aborted:
             print(colour(f"[{index}/{total}] ABBRUCH  {label} | {elapsed}", ANSI_RED))
         else:
@@ -631,6 +651,8 @@ def run_analysis_command(command, cwd, index, total, video_name, key_reader=poll
         return AnalysisProcessResult(returncode, stop_after_current, aborted)
 
     except KeyboardInterrupt:
+        clear_status_line(phase_line_active)
+        phase_line_active = False
         aborted = True
         print("Strg+C erkannt. Analyseprozessbaum wird beendet.")
         stop_process_tree(process)
@@ -642,6 +664,7 @@ def run_analysis_command(command, cwd, index, total, video_name, key_reader=poll
             True,
         )
     except Exception:
+        clear_status_line(phase_line_active)
         stop_process_tree(process)
         raise
     finally:
@@ -900,7 +923,7 @@ def ask_recheck_result(previous):
 def analyse_video(comskip, video, downloads, idx, total, force=False):
     txt = video.with_suffix(".txt")
     if not force and is_complete_comskip_txt(txt):
-        label = compact_video_label(video.name)
+        label = display_video_name(video.name)
         print(colour(f"[{idx}/{total}] VORHANDEN  {label}", ANSI_BLUE))
         return True
 
