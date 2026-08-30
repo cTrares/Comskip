@@ -5,6 +5,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -16,7 +17,7 @@ try:
 except ImportError:
     winreg = None
 
-BUILD_ID = "2026-08-29-COMSKIP-V3-PUBLIC-BROADCASTER-FAST-MODE"
+BUILD_ID = "2026-08-30-COMSKIP-V4-SESSION-FOLDER-COMPACT-PHASES"
 APPROVED_SUFFIX = "_Avidemux.py"
 START_SUFFIX = "_Avidemux_Start.bat"
 CROP_SUFFIX = "_Avidemux_CROP.py"
@@ -28,6 +29,19 @@ COMSKIP_PROGRESS_RE = re.compile(
     r"\b\d+\s+frames\s+in\s+[\d.]+\s+sec.*?,\s*(\d{1,3})%\s*$",
     re.IGNORECASE,
 )
+
+PHASE_RE = re.compile(r"^\[Phase\s+(\d+)/(\d+)\]", re.IGNORECASE)
+TIMESTAMP_PREFIX_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-(?:\d{2}-)?", re.IGNORECASE
+)
+RECORDING_SUFFIX_RE = re.compile(r"_[^_]+_(?:hd|hq)$", re.IGNORECASE)
+
+ANSI_BRIGHT_GREEN = "\x1b[92m"
+ANSI_BLUE = "\x1b[94m"
+ANSI_RED = "\x1b[91m"
+ANSI_RESET = "\x1b[0m"
+
+_SESSION_DIRECTORY = None
 
 ANALYSIS_OUTPUT_SUFFIXES = (
     ".txt",
@@ -59,6 +73,53 @@ class AnalysisProcessResult:
     returncode: int
     stop_after_current: bool = False
     aborted: bool = False
+
+
+def configure_console():
+    """Use real UTF-8 and ANSI colours in Windows Terminal."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_uint()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+    except Exception:
+        pass
+
+
+def colour(text, ansi_code):
+    if getattr(sys.stdout, "isatty", lambda: False)():
+        return f"{ansi_code}{text}{ANSI_RESET}"
+    return text
+
+
+def compact_video_label(video_name):
+    label = Path(video_name).stem
+    label = TIMESTAMP_PREFIX_RE.sub("", label)
+    label = RECORDING_SUFFIX_RE.sub("", label)
+    label = label.replace("_", " ").replace("-", " ")
+    return re.sub(r"\s+", " ", label).strip() or Path(video_name).stem
+
+
+def decode_child_output(raw_line):
+    if isinstance(raw_line, str):
+        return raw_line
+    try:
+        return raw_line.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw_line.decode("cp1252", errors="replace")
 
 
 class WindowsProcessJob:
@@ -165,6 +226,38 @@ def downloads_folder():
 
 def find_videos(downloads):
     return sorted(downloads.glob("*.mp4"), key=lambda p: p.name.lower())
+
+
+def choose_session_folder(current_directory):
+    """Choose a working directory without changing the permanent default."""
+    root = None
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        selected = filedialog.askdirectory(
+            title="Arbeitsverzeichnis für diesen Durchlauf wählen",
+            initialdir=str(current_directory),
+            mustexist=True,
+            parent=root,
+        )
+    except Exception as exc:
+        print(f"FEHLER: Verzeichnisauswahl konnte nicht geöffnet werden: {exc}")
+        return current_directory
+    finally:
+        if root is not None:
+            root.destroy()
+
+    if not selected:
+        print("Verzeichnisauswahl abgebrochen; Arbeitsordner bleibt unverändert.")
+        return current_directory
+
+    chosen = Path(selected).resolve()
+    print("Arbeitsordner für diesen Durchlauf:", chosen)
+    return chosen
 
 
 def is_complete_comskip_txt(path):
@@ -449,12 +542,12 @@ def run_comskip_gui(gui, txt, downloads):
         raise
 
 
-def run_analysis_command(command, cwd, prefix, video_name, key_reader=poll_analysis_key):
+def run_analysis_command(command, cwd, index, total, video_name, key_reader=poll_analysis_key):
     started = time.monotonic()
     process = None
     reader = None
     lines = queue.Queue()
-    last_percent = None
+    last_phase = None
     stop_after_current = False
     aborted = False
 
@@ -462,8 +555,12 @@ def run_analysis_command(command, cwd, prefix, video_name, key_reader=poll_analy
     if os.name == "nt":
         creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
 
-    print(f"{prefix} START: {video_name}")
-    print("[B] Nach diesem Film stoppen | [X] Analyse sofort abbrechen")
+    label = compact_video_label(video_name)
+    print(colour(f"[{index}/{total}] START  {label}", ANSI_BRIGHT_GREEN))
+
+    child_environment = os.environ.copy()
+    child_environment["PYTHONIOENCODING"] = "utf-8"
+    child_environment["PYTHONUTF8"] = "1"
 
     try:
         process = subprocess.Popen(
@@ -471,11 +568,9 @@ def run_analysis_command(command, cwd, prefix, video_name, key_reader=poll_analy
             cwd=str(cwd),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
+            bufsize=0,
             creationflags=creationflags,
+            env=child_environment,
         )
         if os.name == "nt":
             process._workflow_job = WindowsProcessJob(process)
@@ -499,17 +594,17 @@ def run_analysis_command(command, cwd, prefix, video_name, key_reader=poll_analy
                 if raw_line is None:
                     output_finished = True
                     continue
-                line = raw_line.rstrip("\r\n")
-                match = COMSKIP_PROGRESS_RE.search(line)
-                if not match:
+                line = decode_child_output(raw_line).rstrip("\r\n")
+                phase_match = PHASE_RE.match(line)
+                if phase_match:
+                    phase = (int(phase_match.group(1)), int(phase_match.group(2)))
+                    if phase == last_phase:
+                        continue
+                    last_phase = phase
+                    print(f"[Phase {phase[0]}/{phase[1]}]")
                     continue
-                percent = max(0, min(100, int(match.group(1))))
-                step = min(100, (percent // 10) * 10)
-                if step == 0 or step == last_percent:
-                    continue
-                last_percent = step
-                elapsed = format_elapsed(time.monotonic() - started)
-                print(f"{prefix} {step:3d}% | {video_name} | {elapsed} vergangen")
+                if line.upper().startswith(("WARNUNG", "FEHLER")):
+                    print(line)
 
             key = key_reader()
             if key == "b" and not stop_after_current:
@@ -527,9 +622,12 @@ def run_analysis_command(command, cwd, prefix, video_name, key_reader=poll_analy
         returncode = process.wait()
         elapsed = format_elapsed(time.monotonic() - started)
         if aborted:
-            print(f"{prefix} ABBRUCH: {video_name} | {elapsed}")
+            print(colour(f"[{index}/{total}] ABBRUCH  {label} | {elapsed}", ANSI_RED))
         else:
-            print(f"{prefix} 100% | ENDE: {video_name} | {elapsed} | Returncode {returncode}")
+            successful = returncode in (0, 1)
+            status = "OK" if successful else f"FEHLER {returncode}"
+            ansi = ANSI_BLUE if successful else ANSI_RED
+            print(colour(f"[{index}/{total}] ENDE   {label} | {elapsed} | {status}", ansi))
         return AnalysisProcessResult(returncode, stop_after_current, aborted)
 
     except KeyboardInterrupt:
@@ -537,7 +635,7 @@ def run_analysis_command(command, cwd, prefix, video_name, key_reader=poll_analy
         print("Strg+C erkannt. Analyseprozessbaum wird beendet.")
         stop_process_tree(process)
         elapsed = format_elapsed(time.monotonic() - started)
-        print(f"{prefix} ABBRUCH: {video_name} | {elapsed}")
+        print(colour(f"[{index}/{total}] ABBRUCH  {label} | {elapsed}", ANSI_RED))
         return AnalysisProcessResult(
             process.returncode if process is not None and process.returncode is not None else 130,
             False,
@@ -564,7 +662,8 @@ def run_comskip_compact(comskip, video, downloads, idx, total):
     return run_analysis_command(
         [str(comskip), str(video)],
         downloads,
-        f"[Analyse {idx}/{total}]",
+        idx,
+        total,
         video.name,
     )
 
@@ -889,11 +988,12 @@ def workflow_status(videos):
     return analysed, decided, open_review
 
 
-def ask_start_mode(videos):
+def ask_start_mode(videos, working_directory):
     analysed, decided, open_review = workflow_status(videos)
 
     print()
     print("Status:")
+    print(f"  Arbeitsordner        : {working_directory}")
     print(f"  MP4-Dateien gefunden : {len(videos)}")
     print(f"  Comskip analysiert   : {analysed}")
     print(f"  Bereits entschieden  : {decided}")
@@ -905,10 +1005,11 @@ def ask_start_mode(videos):
     print("  [P] Nur offene Filme prüfen / Prüfung fortsetzen")
     print("  [E] Film auswählen / erneut prüfen")
     print("  [R] Einen Film gezielt neu analysieren")
+    print("  [V] Verzeichnis für diesen Durchlauf wählen")
     print("  [Q] Beenden")
 
     while True:
-        ans = input("Auswahl [A/N/P/E/R/Q]: ").strip().lower()
+        ans = input("Auswahl [A/N/P/E/R/V/Q]: ").strip().lower()
         if ans in ("a", "analyse", "analysieren"):
             return "a"
         if ans in ("n", "nur", "nur analysieren"):
@@ -919,9 +1020,11 @@ def ask_start_mode(videos):
             return "e"
         if ans in ("r", "reanalyse", "neu analysieren", "neuanalyse"):
             return "r"
+        if ans in ("v", "verzeichnis", "ordner"):
+            return "v"
         if ans in ("q", "quit", "beenden"):
             return "q"
-        print("Bitte A, N, P, E, R oder Q eingeben.")
+        print("Bitte A, N, P, E, R, V oder Q eingeben.")
 
 
 def run_reanalysis_menu(comskip, downloads):
@@ -1079,13 +1182,16 @@ def run_recheck_menu(comskip, gui, downloads):
 
 
 def run_session():
+    global _SESSION_DIRECTORY
     workflow_dir = Path(__file__).resolve().parent
     comskip_dir = workflow_dir.parent
     comskip_core = comskip_dir / "comskip.exe"
     comskip_final = comskip_dir / "comskip-final.exe"
     comskip = comskip_final if comskip_final.exists() else comskip_core
     gui = comskip_dir / "ComskipGUI.exe"
-    downloads = downloads_folder()
+    if _SESSION_DIRECTORY is None:
+        _SESSION_DIRECTORY = downloads_folder()
+    downloads = _SESSION_DIRECTORY
 
     print("=" * 72)
     print("COMSKIP -> PRUEFEN -> AVIDEMUX")
@@ -1093,28 +1199,26 @@ def run_session():
     print("Workflow-Ordner:", workflow_dir)
     print("Comskip-Ordner :", comskip_dir)
     print("Analyse        :", comskip.name)
-    print("Downloads      :", downloads)
+    print("Arbeitsordner  :", downloads)
     print("Skript         :", Path(__file__).resolve())
     print("Build          :", BUILD_ID)
-    print("Ausgabe        : KOMPAKT (nur Film + Fortschritt)")
+    print("Ausgabe        : KOMPAKT (Start, Phasen, Ende)")
 
     if not comskip.exists() or not gui.exists():
         print("FEHLER: Comskip-Analyse oder ComskipGUI.exe wurde eine Ebene höher nicht gefunden.")
         input("Enter zum Beenden ...")
         return 2
 
-    videos = find_videos(downloads)
-    if not videos:
-        print("Keine MP4-Dateien gefunden.")
-        input("Enter zum Beenden ...")
-        return 0
-
     while True:
         videos = find_videos(downloads)
-        mode = ask_start_mode(videos)
+        mode = ask_start_mode(videos, downloads)
         if mode == "q":
             print("Beendet.")
             return 0
+        if mode == "v":
+            downloads = choose_session_folder(downloads)
+            _SESSION_DIRECTORY = downloads
+            continue
         if mode == "e":
             run_recheck_menu(comskip, gui, downloads)
             continue
@@ -1124,6 +1228,10 @@ def run_session():
         break
 
     if mode in ("a", "n"):
+        if not videos:
+            print("Keine MP4-Dateien im gewählten Arbeitsordner gefunden.")
+            return 0
+        print("Steuerung: [B] nach aktuellem Film stoppen | [X] sofort abbrechen")
         for idx, video in enumerate(videos, 1):
             analyse_video(comskip, video, downloads, idx, len(videos))
 
@@ -1212,6 +1320,7 @@ def run_session():
 
 
 def main():
+    configure_console()
     while True:
         try:
             return run_session()
