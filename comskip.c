@@ -7223,6 +7223,7 @@ void OutputCommercialBlock(int i, long prev, long start, long end, bool last)
 {
     int s_start, s_end;
     int count;
+    long default_output_start, default_output_end;
     double minutes = F2T(frame_count)/60;
     char scomment[80];
     char ecomment[80];
@@ -7250,10 +7251,22 @@ void OutputCommercialBlock(int i, long prev, long start, long end, bool last)
     }
     if (output_default && prev < start /*&& !last */)
     {
+        default_output_start = F2F(sage_framenumber_bug?s_start/2:s_start);
+        default_output_end = F2F(sage_framenumber_bug?s_end/2:s_end);
+        /*
+         * A .txt boundary is loaded through its timestamp and saved through
+         * F2F again.  Around the first decoded picture, PTS rounding can turn
+         * the external frame 1 into frame 2 or 3 on every review/save cycle.
+         * There cannot be useful programme content before a first cut this
+         * close to the file origin, so keep that boundary idempotently at 1.
+         * Do not alter any later boundary.
+         */
+        if (i == 0 && default_output_start <= 3)
+            default_output_start = 1;
         out_file = myfopen(out_filename, "a+");
         if (out_file)
         {
-            fprintf(out_file, "%li\t%li\n", F2F(sage_framenumber_bug?s_start/2:s_start), F2F(sage_framenumber_bug?s_end/2:s_end));
+            fprintf(out_file, "%li\t%li\n", default_output_start, default_output_end);
             fclose(out_file);
         }
         else  		// If the file can't be opened for writting, wait half a second and try again
@@ -7262,7 +7275,7 @@ void OutputCommercialBlock(int i, long prev, long start, long end, bool last)
             out_file = myfopen(out_filename, "a+");
             if (out_file)
             {
-                fprintf(out_file, "%li\t%li\n", F2F(sage_framenumber_bug?s_start/2:s_start), F2F(sage_framenumber_bug?s_end/2:s_end));
+                fprintf(out_file, "%li\t%li\n", default_output_start, default_output_end);
                 fclose(out_file);
             }
             else  	// If the file still can't be opened for writting, give up and exit
