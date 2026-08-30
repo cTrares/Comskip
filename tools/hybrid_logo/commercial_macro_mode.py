@@ -27,7 +27,6 @@ DEFAULT_MIN_FILM_RUN_SECONDS = 7.0 * 60.0
 DEFAULT_MIN_BREAK_SECONDS = 150.0
 DEFAULT_BRIDGE_SECONDS = 90.0
 PROTECTED_PRESENT_SECONDS = 90.0
-SEMANTIC_RETURN_CORRIDOR_SECONDS = 120.0
 LOCAL_STEP_SECONDS = 2.0
 LOCAL_RADIUS_SECONDS = 80.0
 LOCAL_PERSISTENCE = 3
@@ -539,34 +538,6 @@ def guard_intervals_with_present_evidence(
     return accepted, reviews
 
 
-def semantic_return_review_markers(
-    intervals: list[tuple[float, float]],
-    *,
-    duration_seconds: float,
-    corridor_seconds: float = SEMANTIC_RETURN_CORRIDOR_SECONDS,
-) -> list[dict]:
-    """Bound the logo-bearing station-promo ambiguity after internal ads.
-
-    A real channel logo can occur in self-promotion, so logo evidence cannot
-    safely decide the final return by itself.  The block end remains the safe
-    automatic cut; a persistent ComskipGUI marker caps the manual search
-    corridor instead of leaving the user to scan arbitrary minutes.
-    """
-    reviews = []
-    for _start, end in intervals:
-        if end >= duration_seconds - 1.0:
-            continue
-        marker = min(duration_seconds - 1.0, end + corridor_seconds)
-        reviews.append(
-            {
-                "seconds": marker,
-                "reason": "LOGO_RUECKKEHR_KANN_EIGENWERBUNG_SEIN",
-                "range_seconds": [end, marker],
-            }
-        )
-    return reviews
-
-
 def _refine_boundary(
     center_seconds: float,
     *,
@@ -834,12 +805,6 @@ def run_commercial_macro_mode(
                 refinements.append(detail)
             if end > start:
                 refined.append((start, end))
-        review_markers.extend(
-            semantic_return_review_markers(
-                refined,
-                duration_seconds=metadata.duration_seconds,
-            )
-        )
         runtime = time.perf_counter() - started
         details = {
             "strategy": "dynamic_logo_progressive_macro_grid_plus_local_transition_refinement",

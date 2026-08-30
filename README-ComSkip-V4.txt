@@ -16,9 +16,11 @@ Sicherheitslogik und Prüfmarker:
 - Kurze Logo-Aussetzer werden zuerst innerhalb eines stabilen Filmblocks
   repariert; erst danach wird über Film- und Werbeblöcke entschieden.
 - Stabile positive Filmabschnitte werden nicht still als Werbung überdeckt.
-- Orange Null-Längen-Marker begrenzen unsichere Logo-Rückkehrbereiche auf
-  höchstens 120 Sekunden. M/N springt zu ihnen. Sie stehen nur in der TXT,
-  niemals als Schnitt in der EDL.
+- Orange Null-Längen-Marker werden nur bei einem tatsächlich gemessenen
+  stabilen positiven Gegenabschnitt innerhalb eines Werbevorschlags erzeugt.
+  Es gibt keine pauschalen Marker in festem Abstand zu Werbeblöcken.
+  M/N springt zu vorhandenen Markern. Sie stehen nur in der TXT, niemals als
+  Schnitt in der EDL.
 - Die Markerübersicht liegt zusätzlich in <Filmname>.pruefmarker.txt.
 - Am Blockrand in ComskipGUI die richtige Stelle suchen und B (Beginn) oder
   E (Ende) drücken; J/K sind nur flüchtige Vorher-/Nachher-Marker, L löscht sie.

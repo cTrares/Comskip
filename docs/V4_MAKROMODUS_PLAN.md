@@ -39,12 +39,11 @@ geringerer Laufzeit.
    dann genommen, wenn danach mindestens 72 Prozent des restlichen lokalen
    Korridors logo-positiv bleiben. Ein einzelner Logo-Treffer innerhalb der
    Werbung kann die Kante deshalb nicht vorziehen.
-   Weil echtes Senderlogo in Eigenwerbung semantisch nicht sicher
-   von Film unterscheidbar ist, bekommt jede innere Logo-Rückkehr zusätzlich
-   einen orangefarbenen Null-Längen-Prüfmarker 120 Sekunden hinter der
-   automatischen Kante. `M`/`N` springt zu diesen Punkten; die EDL schneidet
-   sie nicht. Damit bleibt ein Spezialfall begrenzt, statt minutenlanges
-   manuelles Suchen zu erzwingen.
+   Ein orangefarbener Null-Längen-Prüfmarker wird ausschließlich dann erzeugt,
+   wenn innerhalb eines Werbevorschlags ein tatsächlich gemessener stabiler
+   positiver Gegenabschnitt geschützt werden musste. Es gibt keine Marker in
+   pauschalem Zeitabstand zu einer Blockkante. `M`/`N` springt zu vorhandenen
+   Punkten; die EDL schneidet sie nicht.
 
 ## Ein Vergleichslauf statt Testschleifen
 

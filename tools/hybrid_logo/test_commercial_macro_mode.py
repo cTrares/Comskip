@@ -13,7 +13,6 @@ from commercial_macro_mode import (
     load_macro_channels,
     progressive_sample_stages,
     repair_state_runs,
-    semantic_return_review_markers,
     selected_macro_channel,
     _write_outputs,
     _refine_boundary,
@@ -81,13 +80,6 @@ class CommercialMacroModeTests(unittest.TestCase):
         )
         self.assertEqual([], intervals)
         self.assertEqual(3, len(reviews))
-
-    def test_internal_return_has_bounded_review_corridor(self) -> None:
-        reviews = semantic_return_review_markers(
-            [(0.0, 300.0), (1000.0, 1500.0), (4900.0, 5000.0)],
-            duration_seconds=5000.0,
-        )
-        self.assertEqual([420.0, 1620.0], [item["seconds"] for item in reviews])
 
     def test_review_marker_is_navigable_in_txt_but_never_cut_in_edl(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
