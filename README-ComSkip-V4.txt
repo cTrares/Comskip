@@ -42,6 +42,14 @@ Bestätigung. Das bestehende Log und die bestehende Diagnose-JSON nennen den
 Grund; es wird keine zusätzliche Ausgabedatei und kein neuer Dateiname erzeugt.
 Die angegebene Gesamtlaufzeit enthält beide Stufen.
 
+Sicherheitsprüfung nach Werbeblöcken:
+Die erste Rückkehr des Senderlogos beendet einen inneren Werbeblock nicht mehr
+sofort. Der Makromodus prüft den folgenden Drei-Minuten-Korridor. Folgt dort
+erneut ein belastbarer logo-negativer Werbeabschnitt oder eine lange
+logo-positive Insel mit anschließendem Werberückfall, bleibt diese Zwischenphase
+Teil des Werbeblocks. Erst die danach stabil fortlaufende Filmphase bestimmt die
+Endkante. Kurze Logo-Messaussetzer in echtem Film werden weiterhin toleriert.
+
 Wichtig:
 Der erste V4-Build dient dem gebündelten Vergleichslauf über den vorhandenen
 kommerziellen Filmsatz. V3 bleibt separat erhalten und wird nicht überschrieben.

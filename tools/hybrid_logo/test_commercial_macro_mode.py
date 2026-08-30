@@ -174,6 +174,69 @@ class CommercialMacroModeTests(unittest.TestCase):
         self.assertLessEqual(selected, 3082.0)
         self.assertEqual("REFINED", detail["status"])
 
+    def test_logo_return_is_rejected_when_advertising_relapses_in_safety_corridor(self) -> None:
+        def score_at_times(times):
+            return {
+                seconds: (
+                    0.62
+                    if 1000.0 <= seconds < 1040.0 or seconds >= 1080.0
+                    else 0.24
+                )
+                for seconds in times
+            }
+
+        selected, detail = _refine_boundary(
+            1000.0,
+            target_present=True,
+            duration_seconds=5000.0,
+            score_at_times=score_at_times,
+            deadline=10**12,
+        )
+        self.assertGreaterEqual(selected, 1076.0)
+        self.assertLessEqual(selected, 1086.0)
+        self.assertTrue(detail["return_checks"][0]["negative_relapses"])
+        self.assertTrue(detail["return_checks"][-1]["confirmed"])
+
+    def test_long_logo_positive_promo_island_rejects_even_short_relapse(self) -> None:
+        def score_at_times(times):
+            return {
+                seconds: (
+                    0.62
+                    if 1000.0 <= seconds < 1050.0 or seconds >= 1060.0
+                    else 0.24
+                )
+                for seconds in times
+            }
+
+        selected, detail = _refine_boundary(
+            1000.0,
+            target_present=True,
+            duration_seconds=5000.0,
+            score_at_times=score_at_times,
+            deadline=10**12,
+        )
+        self.assertGreaterEqual(selected, 1056.0)
+        self.assertTrue(
+            detail["return_checks"][0]["rejected_as_logo_positive_promo_island"]
+        )
+
+    def test_short_logo_sensor_hole_does_not_delay_real_movie_return(self) -> None:
+        def score_at_times(times):
+            return {
+                seconds: 0.24 if seconds < 1000.0 or 1040.0 <= seconds < 1046.0 else 0.62
+                for seconds in times
+            }
+
+        selected, detail = _refine_boundary(
+            1000.0,
+            target_present=True,
+            duration_seconds=5000.0,
+            score_at_times=score_at_times,
+            deadline=10**12,
+        )
+        self.assertLessEqual(selected, 1006.0)
+        self.assertTrue(detail["return_checks"][0]["confirmed"])
+
     def test_channel_list_is_exact_and_editable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "Makromodus-Sender.txt"

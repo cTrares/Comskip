@@ -31,6 +31,12 @@ LOCAL_STEP_SECONDS = 2.0
 LOCAL_RADIUS_SECONDS = 80.0
 LOCAL_PERSISTENCE = 3
 LOCAL_MEDIAN_RADIUS = 2
+RETURN_SAFETY_CORRIDOR_SECONDS = 180.0
+RETURN_RELAPSE_SECONDS = 24.0
+RETURN_PROMO_ISLAND_RELAPSE_SECONDS = 6.0
+RETURN_PROMO_ISLAND_MINIMUM_SECONDS = 50.0
+RETURN_CONFIRMATION_SECONDS = 40.0
+RETURN_MIN_PRESENT_FRACTION = 0.72
 LEARNING_EDGE_GUARD_SECONDS = 6.0 * 60.0
 
 
@@ -549,7 +555,10 @@ def _refine_boundary(
     if deadline - time.perf_counter() < 3.0:
         return center_seconds, {"status": "SKIPPED_TIME_BUDGET", "coarse_seconds": center_seconds}
     start = max(0.0, center_seconds - LOCAL_RADIUS_SECONDS)
-    end = min(duration_seconds, center_seconds + LOCAL_RADIUS_SECONDS)
+    forward_radius = (
+        RETURN_SAFETY_CORRIDOR_SECONDS if target_present else LOCAL_RADIUS_SECONDS
+    )
+    end = min(duration_seconds, center_seconds + forward_radius)
     times = []
     current = start
     while current <= end + 1e-6:
@@ -574,21 +583,74 @@ def _refine_boundary(
             candidates.append(persistent[0][0])
     selected = center_seconds
     sustained_candidates = []
+    return_checks = []
     if candidates:
         nearest = min(candidates, key=lambda value: abs(value - center_seconds))
         selected = nearest
         if target_present:
             state_index = {seconds: index for index, (seconds, _state) in enumerate(states)}
-            for candidate in candidates:
-                tail = states[state_index[candidate]:]
-                present_fraction = sum(state for _seconds, state in tail) / max(1, len(tail))
-                if present_fraction >= 0.72:
+            for candidate_number, candidate in enumerate(candidates):
+                candidate_index = state_index[candidate]
+                corridor_end = min(end, candidate + RETURN_SAFETY_CORRIDOR_SECONDS)
+                tail = [
+                    observation
+                    for observation in states[candidate_index:]
+                    if observation[0] <= corridor_end + 1e-6
+                ]
+                observed_seconds = (
+                    tail[-1][0] - candidate + LOCAL_STEP_SECONDS if tail else 0.0
+                )
+                present_fraction = (
+                    sum(state for _seconds, state in tail) / max(1, len(tail))
+                )
+                negative_runs = _state_spans(tail, present=False)
+                relapses = [
+                    [run_start, run_end]
+                    for run_start, run_end in negative_runs
+                    if run_end - run_start >= RETURN_RELAPSE_SECONDS
+                ]
+                confirmed = (
+                    observed_seconds >= RETURN_CONFIRMATION_SECONDS
+                    and not relapses
+                    and present_fraction >= RETURN_MIN_PRESENT_FRACTION
+                )
+                next_candidate = (
+                    candidates[candidate_number + 1]
+                    if candidate_number + 1 < len(candidates)
+                    else None
+                )
+                promo_island_relapses = [
+                    [run_start, run_end]
+                    for run_start, run_end in negative_runs
+                    if run_end - run_start >= RETURN_PROMO_ISLAND_RELAPSE_SECONDS
+                    and next_candidate is not None
+                    and run_end <= next_candidate + LOCAL_STEP_SECONDS
+                ]
+                promo_island = (
+                    next_candidate is not None
+                    and next_candidate - candidate >= RETURN_PROMO_ISLAND_MINIMUM_SECONDS
+                    and bool(promo_island_relapses)
+                )
+                if promo_island:
+                    confirmed = False
+                return_checks.append(
+                    {
+                        "candidate_seconds": candidate,
+                        "observed_seconds": observed_seconds,
+                        "present_fraction": present_fraction,
+                        "negative_relapses": relapses,
+                        "promo_island_relapses": promo_island_relapses,
+                        "rejected_as_logo_positive_promo_island": promo_island,
+                        "confirmed": confirmed,
+                    }
+                )
+                if confirmed:
                     sustained_candidates.append(candidate)
             if sustained_candidates:
-                # A noisy movie return can cross the threshold many times.
-                # Recover the earliest return only when the remaining corridor
-                # is predominantly film-positive; isolated advertising hits
-                # therefore cannot pull the edge backwards.
+                # The first logo return is accepted only if no substantial
+                # logo-negative relapse follows in the three-minute corridor.
+                # Short sensor holes stay tolerated; a second advertising phase
+                # rejects the premature return and moves the edge forward.
                 selected = min(sustained_candidates)
     return selected, {
         "status": "REFINED" if candidates else "NO_PERSISTENT_TRANSITION",
@@ -598,7 +660,31 @@ def _refine_boundary(
         "observations": len(states),
         "temporal_filter": f"median_{LOCAL_MEDIAN_RADIUS * 2 + 1}_samples",
         "sustained_candidates": sustained_candidates,
+        "return_safety_corridor_seconds": (
+            RETURN_SAFETY_CORRIDOR_SECONDS if target_present else 0.0
+        ),
+        "return_checks": return_checks,
     }
+
+
+def _state_spans(
+    states: list[tuple[float, bool]], *, present: bool
+) -> list[tuple[float, float]]:
+    """Compact equally spaced state observations into time spans."""
+    spans: list[tuple[float, float]] = []
+    run_start: float | None = None
+    previous_seconds: float | None = None
+    for seconds, state in states:
+        if state == present:
+            if run_start is None:
+                run_start = seconds
+        elif run_start is not None:
+            spans.append((run_start, seconds))
+            run_start = None
+        previous_seconds = seconds
+    if run_start is not None and previous_seconds is not None:
+        spans.append((run_start, previous_seconds + LOCAL_STEP_SECONDS))
+    return spans
 
 
 def _write_outputs(

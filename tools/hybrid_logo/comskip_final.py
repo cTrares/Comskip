@@ -44,7 +44,7 @@ from commercial_macro_mode import (
 )
 
 
-VERSION = "Comskip V4 2026-08-30 commercial-logo-macro structural-repair-4"
+VERSION = "Comskip V4 2026-08-30 commercial-logo-macro structural-repair-5"
 _ACTIVE_TRACE: "ExitTrace | None" = None
 RUN_DIRECTORY_NAME = "r"
 FILM_DIRECTORY_NAME = "run"
