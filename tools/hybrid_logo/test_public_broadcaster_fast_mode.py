@@ -81,6 +81,31 @@ class PublicBroadcasterFastModeTests(unittest.TestCase):
         self.assertEqual(start.seconds, 10.0)
         self.assertEqual(end.seconds, 50.0)
 
+    def test_negative_candidate_scores_still_return_strongest_boundary(self) -> None:
+        intervals = [
+            BlackInterval(100.0, 101.0, 0.1),
+            BlackInterval(300.0, 301.0, 0.1),
+        ]
+        scores = {
+            75.0: 0.8,
+            90.0: 0.8,
+            111.0: 0.2,
+            126.0: 0.2,
+            275.0: 0.8,
+            290.0: 0.8,
+            311.0: 0.2,
+            326.0: 0.2,
+        }
+        selected, evaluated = choose_boundary_candidate(
+            intervals,
+            side="start",
+            duration_seconds=1000.0,
+            score_at_times=lambda times: {time: scores[time] for time in times},
+            central_score=0.8,
+        )
+        self.assertLess(evaluated[0].selection_score, 0.0)
+        self.assertEqual(selected, evaluated[0])
+
     def test_output_always_contains_two_editable_edge_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

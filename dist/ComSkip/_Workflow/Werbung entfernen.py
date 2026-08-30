@@ -644,8 +644,14 @@ def run_analysis_command(command, cwd, index, total, video_name, key_reader=poll
         if aborted:
             print(colour(f"[{index}/{total}] ABBRUCH  {label} | {elapsed}", ANSI_RED))
         else:
-            successful = returncode in (0, 1)
-            status = "OK" if successful else f"FEHLER {returncode}"
+            result_txt = Path(cwd) / Path(video_name).with_suffix(".txt").name
+            successful = is_complete_comskip_txt(result_txt)
+            status = (
+                "OK"
+                if successful
+                else f"FEHLER {returncode}" if returncode not in (0, 1)
+                else "FEHLER KEINE TXT"
+            )
             ansi = ANSI_BLUE if successful else ANSI_RED
             print(colour(f"[{index}/{total}] ENDE   {label} | {elapsed} | {status}", ansi))
         return AnalysisProcessResult(returncode, stop_after_current, aborted)

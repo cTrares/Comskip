@@ -290,13 +290,22 @@ def choose_boundary_candidate(
         )
     evaluated.sort(key=lambda item: item.selection_score, reverse=True)
     strongest = evaluated[0]
+    # For a negative strongest score, multiplying by a fraction moves the
+    # threshold towards zero and can exclude even the strongest candidate.
+    # Always retain it so an uncertain boundary degrades to the best available
+    # coarse marker instead of aborting the unattended batch.
+    neighbouring_threshold = (
+        strongest.selection_score * NEIGHBOURING_SCORE_FRACTION
+        if strongest.selection_score > 0.0
+        else strongest.selection_score
+    )
     neighbouring_earlier = [
         item
         for item in evaluated
         if strongest.seconds - NEIGHBOURING_TRANSITION_SECONDS <= item.seconds <= strongest.seconds
-        and item.selection_score >= strongest.selection_score * NEIGHBOURING_SCORE_FRACTION
+        and item.selection_score >= neighbouring_threshold
     ]
-    selected = min(neighbouring_earlier, key=lambda item: item.seconds)
+    selected = min(neighbouring_earlier or [strongest], key=lambda item: item.seconds)
     return selected, evaluated
 
 
