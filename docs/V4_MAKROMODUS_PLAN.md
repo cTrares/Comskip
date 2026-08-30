@@ -19,6 +19,11 @@ geringerer Laufzeit.
 3. Sender aus `Makromodus-Sender.txt`: neuer V4-Makromodus.
 4. `--full-analysis`: unveränderter vollständiger V3/Comskip-Ablauf.
 
+Wenn Weg 3 keinen einzigen Schnittblock erzeugt oder technisch fehlschlägt,
+wird sein Arbeitsstand automatisch verworfen und Weg 4 für dieselbe Aufnahme
+gestartet. Der Batch erfordert dafür keine Bestätigung und veröffentlicht nie
+ein leeres Makromodus-Ergebnis als Erfolg.
+
 ## Umsetzung in drei großen Messschritten
 
 1. Dynamisches Logo je Aufnahme aus über fast die gesamte Laufzeit verteilten

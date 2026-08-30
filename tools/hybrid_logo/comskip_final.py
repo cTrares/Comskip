@@ -44,12 +44,13 @@ from commercial_macro_mode import (
 )
 
 
-VERSION = "Comskip V4 2026-08-30 commercial-logo-macro structural-repair-2"
+VERSION = "Comskip V4 2026-08-30 commercial-logo-macro structural-repair-3"
 _ACTIVE_TRACE: "ExitTrace | None" = None
 RUN_DIRECTORY_NAME = "r"
 FILM_DIRECTORY_NAME = "run"
 REVIEW_DIRECTORY_NAME = "review"
 RUN_ID_BYTES = 5
+AUTO_FULL_FALLBACK_MARKER_NAME = "automatic-full-analysis-fallback.txt"
 
 
 class ExitTrace:
@@ -357,6 +358,18 @@ def copy_final_outputs(
         copied.append(portable_review_markers)
     elif result.get("processing_mode") == MACRO_PROCESSING_MODE:
         portable_review_markers.unlink(missing_ok=True)
+    fallback_marker = film_root / AUTO_FULL_FALLBACK_MARKER_NAME
+    portable_fallback_marker = video.with_name(base + ".vollanalyse-fallback.txt")
+    if fallback_marker.is_file():
+        atomic_copy(
+            fallback_marker,
+            portable_fallback_marker,
+            trace=trace,
+            label="VOLLANALYSE_FALLBACK_TXT",
+        )
+        copied.append(portable_fallback_marker)
+    else:
+        portable_fallback_marker.unlink(missing_ok=True)
     diagnostic = film_root / DIAGNOSTIC_NAME
     if diagnostic.is_file():
         destination = video.with_name(base + ".comskip-final.json")
@@ -378,6 +391,87 @@ def copy_final_outputs(
     if trace:
         trace.mark("COPY_FINAL_OUTPUTS_END", copied=[str(path) for path in copied])
     return copied
+
+
+def macro_result_is_empty(result: dict) -> bool:
+    return not result.get("final_stage_intervals")
+
+
+def run_automatic_full_analysis_fallback(
+    *,
+    run_args: argparse.Namespace,
+    video: Path,
+    reason: str,
+    macro_runtime_seconds: float,
+    macro_error: str | None = None,
+    full_runner=run_film,
+) -> dict:
+    """Discard an unusable macro result and run the complete workflow."""
+    film_root = (run_args.output_root / run_args.film_dirname).resolve()
+    output_root = run_args.output_root.resolve()
+    if film_root.parent != output_root:
+        raise RuntimeError(f"Unsafe macro fallback workspace: {film_root}")
+    if film_root.exists():
+        shutil.rmtree(film_root)
+    sight_root = run_args.sight_root.resolve()
+    if sight_root.parent != output_root:
+        raise RuntimeError(f"Unsafe macro fallback review workspace: {sight_root}")
+    if sight_root.exists():
+        shutil.rmtree(sight_root)
+    sight_root.mkdir(parents=True)
+
+    print("=" * 72, flush=True)
+    print("AUTOMATISCHE ESKALATION: VOLLSTÄNDIGE ANALYSE", flush=True)
+    print(f"Grund: {reason}", flush=True)
+    print("Der Batch läuft ohne manuellen Eingriff weiter.", flush=True)
+    print("=" * 72, flush=True)
+    phase(1, 6, "Fallback", "vollständige Comskip-Analyse")
+    run_args.exit_trace(
+        "MACRO_AUTOMATIC_FULL_ANALYSIS_START",
+        reason=reason,
+        macro_runtime_seconds=macro_runtime_seconds,
+        macro_error=macro_error,
+    )
+    result = full_runner(run_args, video.stem, video)
+    fallback = {
+        "activated": True,
+        "reason": reason,
+        "macro_runtime_seconds": macro_runtime_seconds,
+        "macro_error": macro_error,
+    }
+    result["automatic_full_analysis_fallback"] = fallback
+    runtime = result.setdefault("runtime_seconds", {})
+    full_runtime = float(runtime.get("total", 0.0))
+    runtime["full_analysis"] = full_runtime
+    runtime["macro_probe"] = macro_runtime_seconds
+    runtime["total"] = full_runtime + macro_runtime_seconds
+
+    film_root.mkdir(parents=True, exist_ok=True)
+    marker = (
+        "AUTOMATISCHE VOLLSTÄNDIGE ANALYSE\n"
+        f"Grund: {reason}\n"
+        f"Makromodus-Laufzeit vor Eskalation: {macro_runtime_seconds:.3f} s\n"
+        + (f"Makromodus-Fehler: {macro_error}\n" if macro_error else "")
+        + "Der leere oder fehlgeschlagene Makromodus wurde nicht veröffentlicht.\n"
+    )
+    (film_root / AUTO_FULL_FALLBACK_MARKER_NAME).write_text(
+        marker, encoding="utf-8", newline="\n"
+    )
+    diagnostic = film_root / DIAGNOSTIC_NAME
+    diagnostic.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    final_log = film_root / FINAL_DIRECTORY_NAME / f"{FINAL_OUTPUT_NAME}.log"
+    if final_log.is_file():
+        with final_log.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write("\nAUTOMATISCHE VOLLSTÄNDIGE ANALYSE\n")
+            handle.write(f"Grund: {reason}\n")
+    run_args.exit_trace(
+        "MACRO_AUTOMATIC_FULL_ANALYSIS_END",
+        reason=reason,
+        final_stage=result.get("final_stage_intervals"),
+    )
+    return result
 
 
 def main() -> int:
@@ -528,22 +622,40 @@ def main() -> int:
                 ),
             )
         elif macro_mode_channel:
-            result = run_commercial_macro_mode(
-                video=video,
-                film_root=run_args.output_root / run_args.film_dirname,
-                ffmpeg=run_args.ffmpeg,
-                ffprobe=run_args.ffprobe,
-                comskip=run_args.comskip,
-                ini=run_args.ini,
-                channel=macro_mode_channel,
-                config_path=macro_mode_config,
-                time_budget_seconds=float(
-                    getattr(args, "macro_time_budget", DEFAULT_MACRO_TIME_BUDGET_SECONDS)
-                ),
-                sample_seconds=float(
-                    getattr(args, "macro_sample_seconds", DEFAULT_MACRO_SAMPLE_SECONDS)
-                ),
-            )
+            macro_started = time.perf_counter()
+            try:
+                result = run_commercial_macro_mode(
+                    video=video,
+                    film_root=run_args.output_root / run_args.film_dirname,
+                    ffmpeg=run_args.ffmpeg,
+                    ffprobe=run_args.ffprobe,
+                    comskip=run_args.comskip,
+                    ini=run_args.ini,
+                    channel=macro_mode_channel,
+                    config_path=macro_mode_config,
+                    time_budget_seconds=float(
+                        getattr(args, "macro_time_budget", DEFAULT_MACRO_TIME_BUDGET_SECONDS)
+                    ),
+                    sample_seconds=float(
+                        getattr(args, "macro_sample_seconds", DEFAULT_MACRO_SAMPLE_SECONDS)
+                    ),
+                )
+            except Exception as macro_exc:
+                result = run_automatic_full_analysis_fallback(
+                    run_args=run_args,
+                    video=video,
+                    reason="MAKROMODUS_FEHLGESCHLAGEN",
+                    macro_runtime_seconds=time.perf_counter() - macro_started,
+                    macro_error=f"{type(macro_exc).__name__}: {macro_exc}",
+                )
+            else:
+                if macro_result_is_empty(result):
+                    result = run_automatic_full_analysis_fallback(
+                        run_args=run_args,
+                        video=video,
+                        reason="MAKROMODUS_OHNE_SCHNITTBLOCK",
+                        macro_runtime_seconds=time.perf_counter() - macro_started,
+                    )
         else:
             result = run_film(run_args, video.stem, video)
         trace.mark("RUN_FILM_RETURNED", final_stage=result.get("final_stage_intervals"))

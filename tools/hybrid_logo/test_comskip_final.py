@@ -23,7 +23,9 @@ from comskip_final import (
     create_diagnostic_package,
     executable_default,
     main,
+    macro_result_is_empty,
     parse_args,
+    run_automatic_full_analysis_fallback,
     runtime_root,
 )
 from multiwindow_logo_experiment import (
@@ -35,6 +37,60 @@ from multiwindow_logo_experiment import (
 
 
 class ComskipFinalTests(unittest.TestCase):
+    def test_empty_macro_result_requires_automatic_full_analysis(self) -> None:
+        self.assertTrue(macro_result_is_empty({"final_stage_intervals": []}))
+        self.assertFalse(macro_result_is_empty({"final_stage_intervals": [[1, 100]]}))
+
+    def test_automatic_fallback_discards_macro_outputs_and_marks_full_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = root / "Film_tele-5_hq.mp4"
+            video.write_bytes(b"video")
+            output_root = root / "work"
+            film_root = output_root / FILM_DIRECTORY_NAME
+            (film_root / "final").mkdir(parents=True)
+            (film_root / "final" / "old.txt").write_text("macro", encoding="utf-8")
+            sight_root = output_root / "review"
+            sight_root.mkdir()
+            traces = []
+            run_args = argparse.Namespace(
+                output_root=output_root,
+                sight_root=sight_root,
+                film_dirname=FILM_DIRECTORY_NAME,
+                exit_trace=lambda stage, **details: traces.append((stage, details)),
+            )
+
+            def full_runner(args, key, selected_video):
+                self.assertFalse((args.output_root / args.film_dirname / "final" / "old.txt").exists())
+                self.assertEqual(video.stem, key)
+                self.assertEqual(video, selected_video)
+                target = args.output_root / args.film_dirname
+                final = target / "final"
+                final.mkdir(parents=True)
+                (final / "final.log").write_text("full\n", encoding="utf-8")
+                return {"final_stage_intervals": [[10, 20]], "runtime_seconds": {"total": 100.0}}
+
+            result = run_automatic_full_analysis_fallback(
+                run_args=run_args,
+                video=video,
+                reason="MAKROMODUS_OHNE_SCHNITTBLOCK",
+                macro_runtime_seconds=17.5,
+                full_runner=full_runner,
+            )
+
+            self.assertEqual(117.5, result["runtime_seconds"]["total"])
+            self.assertTrue(result["automatic_full_analysis_fallback"]["activated"])
+            self.assertTrue((film_root / "automatic-full-analysis-fallback.txt").is_file())
+            diagnostic = json.loads((film_root / DIAGNOSTIC_NAME).read_text(encoding="utf-8"))
+            self.assertEqual(
+                "MAKROMODUS_OHNE_SCHNITTBLOCK",
+                diagnostic["automatic_full_analysis_fallback"]["reason"],
+            )
+            self.assertEqual(
+                ["MACRO_AUTOMATIC_FULL_ANALYSIS_START", "MACRO_AUTOMATIC_FULL_ANALYSIS_END"],
+                [stage for stage, _details in traces],
+            )
+
     def test_v3_defaults_general_edge_refiner_to_active(self) -> None:
         with mock.patch.object(sys, "argv", ["comskip-final.exe"]):
             parsed = parse_args()

@@ -34,6 +34,13 @@ comskip-final.exe --full-analysis "D:\Pfad\Film_sender_hq.mp4"
 Makromodus vorübergehend abschalten:
 comskip-final.exe --macro-mode off "D:\Pfad\Film_sender_hq.mp4"
 
+Automatische Eskalation im Batch:
+Erzeugt der Makromodus keinen einzigen Schnittblock oder schlägt er technisch
+fehl, wird sein Ergebnis verworfen und für diesen Film automatisch die
+vollständige Comskip-Analyse gestartet. Der Batch wartet nicht auf eine
+Bestätigung. Die Datei <Filmname>.vollanalyse-fallback.txt und das Log nennen
+den Grund. Die angegebene Gesamtlaufzeit enthält beide Stufen.
+
 Wichtig:
 Der erste V4-Build dient dem gebündelten Vergleichslauf über den vorhandenen
 kommerziellen Filmsatz. V3 bleibt separat erhalten und wird nicht überschrieben.
