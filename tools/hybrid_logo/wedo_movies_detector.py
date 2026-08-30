@@ -614,6 +614,7 @@ def apply_wedo_movies_intervals(
     edl_path: Path,
     report: dict,
     fps: float,
+    authoritative: bool = False,
 ) -> dict:
     header, total_frames, existing = _parse_txt(txt_path)
     added = []
@@ -621,7 +622,23 @@ def apply_wedo_movies_intervals(
         start = max(0, min(total_frames, int(round(float(candidate["start_seconds"]) * fps))))
         end = max(start, min(total_frames, int(round(float(candidate["end_seconds"]) * fps))))
         added.append((start, end))
-    merged = _merge_intervals([*existing, *added])
+    if authoritative:
+        # WeDo Movies is a closed station profile.  General Comskip intervals
+        # may provide a harmless outer crop at the physical file edges, but
+        # they must never add an internal block or extend a WeDo interval.
+        edge_existing = [
+            interval
+            for interval in existing
+            if (interval[0] <= 3 or interval[1] >= total_frames - 2)
+            and not any(
+                max(interval[0], wedo[0]) <= min(interval[1], wedo[1])
+                for wedo in added
+            )
+        ]
+        merged = _merge_intervals([*edge_existing, *added])
+    else:
+        edge_existing = []
+        merged = _merge_intervals([*existing, *added])
 
     pre_txt = txt_path.with_name(txt_path.stem + "-pre-wedo.txt")
     pre_edl = edl_path.with_name(edl_path.stem + "-pre-wedo.edl")
@@ -652,6 +669,8 @@ def apply_wedo_movies_intervals(
         "existing_intervals": [list(interval) for interval in existing],
         "wedo_intervals": [list(interval) for interval in added],
         "fused_intervals": [list(interval) for interval in merged],
+        "authoritative": authoritative,
+        "preserved_outer_intervals": [list(interval) for interval in edge_existing],
         "pre_wedo_txt": str(pre_txt),
         "pre_wedo_edl": str(pre_edl) if pre_edl.is_file() else None,
     }

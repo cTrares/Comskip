@@ -7223,7 +7223,6 @@ void OutputCommercialBlock(int i, long prev, long start, long end, bool last)
 {
     int s_start, s_end;
     int count;
-    long default_output_start, default_output_end;
     double minutes = F2T(frame_count)/60;
     char scomment[80];
     char ecomment[80];
@@ -7251,22 +7250,10 @@ void OutputCommercialBlock(int i, long prev, long start, long end, bool last)
     }
     if (output_default && prev < start /*&& !last */)
     {
-        default_output_start = F2F(sage_framenumber_bug?s_start/2:s_start);
-        default_output_end = F2F(sage_framenumber_bug?s_end/2:s_end);
-        /*
-         * A .txt boundary is loaded through its timestamp and saved through
-         * F2F again.  Around the first decoded picture, PTS rounding can turn
-         * the external frame 1 into frame 2 or 3 on every review/save cycle.
-         * There cannot be useful programme content before a first cut this
-         * close to the file origin, so keep that boundary idempotently at 1.
-         * Do not alter any later boundary.
-         */
-        if (i == 0 && default_output_start <= 3)
-            default_output_start = 1;
         out_file = myfopen(out_filename, "a+");
         if (out_file)
         {
-            fprintf(out_file, "%li\t%li\n", default_output_start, default_output_end);
+            fprintf(out_file, "%li\t%li\n", F2F(sage_framenumber_bug?s_start/2:s_start), F2F(sage_framenumber_bug?s_end/2:s_end));
             fclose(out_file);
         }
         else  		// If the file can't be opened for writting, wait half a second and try again
@@ -7275,7 +7262,7 @@ void OutputCommercialBlock(int i, long prev, long start, long end, bool last)
             out_file = myfopen(out_filename, "a+");
             if (out_file)
             {
-                fprintf(out_file, "%li\t%li\n", default_output_start, default_output_end);
+                fprintf(out_file, "%li\t%li\n", F2F(sage_framenumber_bug?s_start/2:s_start), F2F(sage_framenumber_bug?s_end/2:s_end));
                 fclose(out_file);
             }
             else  	// If the file still can't be opened for writting, give up and exit
@@ -14106,6 +14093,18 @@ int FindFrameWithPts(double t)
         return(t * fps);
 }
 
+static double ExternalFrameToPts(long external_frame)
+{
+    /*
+     * Output frame numbers are one-based: F2F maps a zero-second PTS to
+     * external frame 1.  InputReffer used to interpret external frame N as
+     * N/fps, so loading and saving shifted every boundary to N+1 (and could
+     * repeat the shift on every save).  This is the inverse of F2F for the
+     * external frame grid and keeps all boundaries idempotent.
+     */
+    return ((double)max(external_frame - 1, 0)) / fps;
+}
+
 int InputReffer(char *extension, int setfps)
 {
     int		i;
@@ -14175,12 +14174,14 @@ int InputReffer(char *extension, int setfps)
                 switch (col)
                 {
                 case 0:
-                    reffer[reffer_count].start_frame = FindFrameWithPts(((double)strtol(split, NULL, 10))/fps);
+                    reffer[reffer_count].start_frame = FindFrameWithPts(
+                        ExternalFrameToPts(strtol(split, NULL, 10)));
                     if (sage_framenumber_bug) reffer[reffer_count].start_frame *= 2;
                     break;
 
                 case 1:
-                    reffer[reffer_count].end_frame = FindFrameWithPts(((double)strtol(split, NULL, 10))/fps);
+                    reffer[reffer_count].end_frame = FindFrameWithPts(
+                        ExternalFrameToPts(strtol(split, NULL, 10)));
                     if (reffer[reffer_count].end_frame < reffer[reffer_count].start_frame)
                     {
                         Debug(0,"Error in .ref file, end < start frame\n");

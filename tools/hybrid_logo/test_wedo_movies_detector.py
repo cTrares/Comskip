@@ -80,6 +80,43 @@ class WedoMoviesDetectorTests(unittest.TestCase):
             self.assertTrue((root / "final-pre-wedo.txt").is_file())
             self.assertTrue((root / "final-pre-wedo.edl").is_file())
 
+    def test_authoritative_wedo_drops_general_internal_blocks_and_extensions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            txt = root / "final.txt"
+            edl = root / "final.edl"
+            txt.write_text(
+                "FILE PROCESSING COMPLETE 10000 FRAMES AT  2500\n"
+                "-------------------\n"
+                "1\t100\n"
+                "240\t700\n"
+                "800\t900\n"
+                "9900\t10000\n",
+                encoding="ascii",
+            )
+            edl.write_text("", encoding="ascii")
+            report = {
+                "candidates": [
+                    {"start_seconds": 10.0, "end_seconds": 20.0},
+                ]
+            }
+
+            result = apply_wedo_movies_intervals(
+                txt_path=txt,
+                edl_path=edl,
+                report=report,
+                fps=25.0,
+                authoritative=True,
+            )
+
+            self.assertTrue(result["authoritative"])
+            self.assertEqual(
+                result["fused_intervals"],
+                [[1, 100], [250, 500], [9900, 10000]],
+            )
+            self.assertNotIn("240\t700", txt.read_text(encoding="ascii"))
+            self.assertNotIn("800\t900", txt.read_text(encoding="ascii"))
+
     def test_fusion_rolls_back_both_outputs_if_second_publication_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

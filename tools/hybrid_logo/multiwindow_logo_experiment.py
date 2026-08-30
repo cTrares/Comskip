@@ -845,6 +845,7 @@ def run_film(args: argparse.Namespace, key: str, video: Path) -> dict:
                 edl_path=final_root / f"{FINAL_OUTPUT_NAME}.edl",
                 report=wedo_movies_report,
                 fps=metadata["fps"],
+                authoritative=True,
             )
             exit_trace(
                 "WEDO_MOVIES_FUSION_END",
