@@ -900,7 +900,8 @@ def ask_recheck_result(previous):
 def analyse_video(comskip, video, downloads, idx, total, force=False):
     txt = video.with_suffix(".txt")
     if not force and is_complete_comskip_txt(txt):
-        print(f"[Analyse {idx}/{total}] vorhanden: {video.name}")
+        label = compact_video_label(video.name)
+        print(colour(f"[{idx}/{total}] VORHANDEN  {label}", ANSI_BLUE))
         return True
 
     output_snapshot = None
