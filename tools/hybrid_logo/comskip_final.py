@@ -44,13 +44,12 @@ from commercial_macro_mode import (
 )
 
 
-VERSION = "Comskip V4 2026-08-30 commercial-logo-macro structural-repair-3"
+VERSION = "Comskip V4 2026-08-30 commercial-logo-macro structural-repair-4"
 _ACTIVE_TRACE: "ExitTrace | None" = None
 RUN_DIRECTORY_NAME = "r"
 FILM_DIRECTORY_NAME = "run"
 REVIEW_DIRECTORY_NAME = "review"
 RUN_ID_BYTES = 5
-AUTO_FULL_FALLBACK_MARKER_NAME = "automatic-full-analysis-fallback.txt"
 
 
 class ExitTrace:
@@ -358,18 +357,6 @@ def copy_final_outputs(
         copied.append(portable_review_markers)
     elif result.get("processing_mode") == MACRO_PROCESSING_MODE:
         portable_review_markers.unlink(missing_ok=True)
-    fallback_marker = film_root / AUTO_FULL_FALLBACK_MARKER_NAME
-    portable_fallback_marker = video.with_name(base + ".vollanalyse-fallback.txt")
-    if fallback_marker.is_file():
-        atomic_copy(
-            fallback_marker,
-            portable_fallback_marker,
-            trace=trace,
-            label="VOLLANALYSE_FALLBACK_TXT",
-        )
-        copied.append(portable_fallback_marker)
-    else:
-        portable_fallback_marker.unlink(missing_ok=True)
     diagnostic = film_root / DIAGNOSTIC_NAME
     if diagnostic.is_file():
         destination = video.with_name(base + ".comskip-final.json")
@@ -447,16 +434,6 @@ def run_automatic_full_analysis_fallback(
     runtime["total"] = full_runtime + macro_runtime_seconds
 
     film_root.mkdir(parents=True, exist_ok=True)
-    marker = (
-        "AUTOMATISCHE VOLLSTÄNDIGE ANALYSE\n"
-        f"Grund: {reason}\n"
-        f"Makromodus-Laufzeit vor Eskalation: {macro_runtime_seconds:.3f} s\n"
-        + (f"Makromodus-Fehler: {macro_error}\n" if macro_error else "")
-        + "Der leere oder fehlgeschlagene Makromodus wurde nicht veröffentlicht.\n"
-    )
-    (film_root / AUTO_FULL_FALLBACK_MARKER_NAME).write_text(
-        marker, encoding="utf-8", newline="\n"
-    )
     diagnostic = film_root / DIAGNOSTIC_NAME
     diagnostic.write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

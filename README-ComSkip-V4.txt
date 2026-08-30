@@ -38,8 +38,9 @@ Automatische Eskalation im Batch:
 Erzeugt der Makromodus keinen einzigen Schnittblock oder schlägt er technisch
 fehl, wird sein Ergebnis verworfen und für diesen Film automatisch die
 vollständige Comskip-Analyse gestartet. Der Batch wartet nicht auf eine
-Bestätigung. Die Datei <Filmname>.vollanalyse-fallback.txt und das Log nennen
-den Grund. Die angegebene Gesamtlaufzeit enthält beide Stufen.
+Bestätigung. Das bestehende Log und die bestehende Diagnose-JSON nennen den
+Grund; es wird keine zusätzliche Ausgabedatei und kein neuer Dateiname erzeugt.
+Die angegebene Gesamtlaufzeit enthält beide Stufen.
 
 Wichtig:
 Der erste V4-Build dient dem gebündelten Vergleichslauf über den vorhandenen

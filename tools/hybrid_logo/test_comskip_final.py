@@ -80,7 +80,6 @@ class ComskipFinalTests(unittest.TestCase):
 
             self.assertEqual(117.5, result["runtime_seconds"]["total"])
             self.assertTrue(result["automatic_full_analysis_fallback"]["activated"])
-            self.assertTrue((film_root / "automatic-full-analysis-fallback.txt").is_file())
             diagnostic = json.loads((film_root / DIAGNOSTIC_NAME).read_text(encoding="utf-8"))
             self.assertEqual(
                 "MAKROMODUS_OHNE_SCHNITTBLOCK",
