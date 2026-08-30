@@ -44,7 +44,7 @@ from commercial_macro_mode import (
 )
 
 
-VERSION = "Comskip V4 2026-08-30 commercial-logo-macro"
+VERSION = "Comskip V4 2026-08-30 commercial-logo-macro structural-repair-1"
 _ACTIVE_TRACE: "ExitTrace | None" = None
 RUN_DIRECTORY_NAME = "r"
 FILM_DIRECTORY_NAME = "run"
@@ -345,6 +345,18 @@ def copy_final_outputs(
         copied.append(portable_macro_mode_marker)
     elif result.get("processing_mode") != MACRO_PROCESSING_MODE:
         portable_macro_mode_marker.unlink(missing_ok=True)
+    review_markers = final_root / "final.review-markers.txt"
+    portable_review_markers = video.with_name(base + ".pruefmarker.txt")
+    if review_markers.is_file() and review_markers.stat().st_size:
+        atomic_copy(
+            review_markers,
+            portable_review_markers,
+            trace=trace,
+            label="PRUEFMARKER_TXT",
+        )
+        copied.append(portable_review_markers)
+    elif result.get("processing_mode") == MACRO_PROCESSING_MODE:
+        portable_review_markers.unlink(missing_ok=True)
     diagnostic = film_root / DIAGNOSTIC_NAME
     if diagnostic.is_file():
         destination = video.with_name(base + ".comskip-final.json")

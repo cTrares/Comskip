@@ -12,6 +12,17 @@ Automatische Auswahl:
 Der Makromodus wird deutlich im Konsolenfenster, im Log und in einer Datei
 <Filmname>.makromodus.txt gekennzeichnet.
 
+Sicherheitslogik und Prüfmarker:
+- Kurze Logo-Aussetzer werden zuerst innerhalb eines stabilen Filmblocks
+  repariert; erst danach wird über Film- und Werbeblöcke entschieden.
+- Stabile positive Filmabschnitte werden nicht still als Werbung überdeckt.
+- Orange Null-Längen-Marker begrenzen unsichere Logo-Rückkehrbereiche auf
+  höchstens 120 Sekunden. M/N springt zu ihnen. Sie stehen nur in der TXT,
+  niemals als Schnitt in der EDL.
+- Die Markerübersicht liegt zusätzlich in <Filmname>.pruefmarker.txt.
+- Am Blockrand in ComskipGUI die richtige Stelle suchen und B (Beginn) oder
+  E (Ende) drücken; J/K sind nur flüchtige Vorher-/Nachher-Marker, L löscht sie.
+
 Senderliste ändern:
 Makromodus-Sender.txt mit einem Dateinamen-Token pro Zeile bearbeiten.
 

@@ -27,11 +27,24 @@ geringerer Laufzeit.
    Falls der interne Heatmap-Lerner keinen Kandidaten findet, werden nur fünf
    kurze Fenster parallel mit Comskips bewährtem Logo-Lerner geprüft. Der
    vollständige Comskip-Sensordurchgang bleibt auch dann ausgeschaltet.
-2. Lange stabile Filmblöcke bilden, kurze Logoaussetzer überbrücken und nur
-   plausible lange Lücken als Werbung behandeln.
+2. Zuerst kurze Logoaussetzer von höchstens 90 Sekunden an bereits stabile
+   Filmzusammenhänge anbinden, erst danach die Mindestlänge von sieben Minuten
+   auf Filmanker anwenden. Ein stabil positiver Abschnitt von mindestens 90
+   Sekunden darf von einem Werbevorschlag nicht einfach überdeckt werden.
 3. Nur die wenigen gefundenen Blockgrenzen lokal in einem Zwei-Sekunden-Raster
-   nachprüfen. Schwarzbild-Snapping wird erst ergänzt, wenn der Vergleichslauf
-   dafür einen messbaren Nutzen zeigt.
+   nachprüfen. Fünf benachbarte Messungen werden dabei zeitlich per Median
+   stabilisiert; ein einzelner dunkler oder texturierter Hintergrund darf ein
+   sichtbares Logo nicht mehr bis zur nächsten zufällig hellen Szene verbergen.
+   Bei einer mehrfach schwankenden Filmrückkehr wird die früheste Kante nur
+   dann genommen, wenn danach mindestens 72 Prozent des restlichen lokalen
+   Korridors logo-positiv bleiben. Ein einzelner Logo-Treffer innerhalb der
+   Werbung kann die Kante deshalb nicht vorziehen.
+   Weil echtes Senderlogo in Eigenwerbung semantisch nicht sicher
+   von Film unterscheidbar ist, bekommt jede innere Logo-Rückkehr zusätzlich
+   einen orangefarbenen Null-Längen-Prüfmarker 120 Sekunden hinter der
+   automatischen Kante. `M`/`N` springt zu diesen Punkten; die EDL schneidet
+   sie nicht. Damit bleibt ein Spezialfall begrenzt, statt minutenlanges
+   manuelles Suchen zu erzwingen.
 
 ## Ein Vergleichslauf statt Testschleifen
 
