@@ -9,12 +9,13 @@ jobs:
     runs-on: windows-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v7
       with:
         python-version: '3.12'
         cache: pip
+        cache-dependency-path: requirements-build.txt
     - name: Install pinned build dependencies
       run: python -m pip install -r requirements-build.txt
     - name: Run Python tests
@@ -34,18 +35,11 @@ jobs:
           platform: linux
         - os: macos-latest
           platform: macos
-          ffmpeg_version: ffmpeg5
-        - os: macos-latest
-          platform: macos
-          ffmpeg_version: ffmpeg6
-        - os: macos-latest
-          platform: macos
-          ffmpeg_version: ffmpeg7
         - os: windows-latest
           platform: windows-mingw
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     - name: Setup
       shell: bash
@@ -58,22 +52,10 @@ jobs:
       run: |
         sudo apt-get install -y autoconf libtool git build-essential libargtable2-dev libavformat-dev libswscale-dev libsdl1.2-dev
 
-    - name: Configure Brew packages ffmpeg7
-      if: ${{ matrix.ffmpeg_version == 'ffmpeg7' }}
+    - name: Configure Brew packages
+      if: ${{ matrix.platform == 'macos' }}
       run: |
         brew install autoconf automake libtool pkgconf argtable ffmpeg sdl2
-
-    - name: Configure Brew packages ffmpeg6
-      if: ${{ matrix.ffmpeg_version == 'ffmpeg6' }}
-      run: |
-        brew install autoconf automake libtool pkgconf argtable ffmpeg@6 sdl2
-        brew link ffmpeg@6
-
-    - name: Configure Brew packages ffmpeg5
-      if: ${{ matrix.ffmpeg_version == 'ffmpeg5' }}
-      run: |
-        brew install autoconf automake libtool pkgconf argtable ffmpeg@5 sdl2
-        brew link ffmpeg@5
 
     - name: Setup msys2
       uses: msys2/setup-msys2@v2
@@ -89,6 +71,7 @@ jobs:
           mingw-w64-x86_64-yasm
           mingw-w64-x86_64-argtable
           mingw-w64-x86_64-ffmpeg
+          mingw-w64-x86_64-SDL2
     - name: Put MSYS2_MinGW64 on PATH
       if: ${{ matrix.platform == 'windows-mingw' }}
       run: |
