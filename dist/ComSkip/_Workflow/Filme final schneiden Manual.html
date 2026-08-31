@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Filme final schneiden – Manual</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --background: #f4f6f8;
+      --surface: #ffffff;
+      --text: #17202a;
+      --muted: #52606d;
+      --line: #d9e0e7;
+      --accent: #145da0;
+      --accent-soft: #eaf4ff;
+      --safe: #176b3a;
+      --safe-soft: #eaf7ef;
+      --warning: #8a5a00;
+      --warning-soft: #fff7df;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--background);
+      color: var(--text);
+      font-family: "Segoe UI", Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    main {
+      width: min(960px, calc(100% - 32px));
+      margin: 32px auto;
+      padding: 36px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 8px 28px rgba(23, 32, 42, 0.08);
+    }
+
+    h1, h2, h3 { line-height: 1.25; }
+    h1 { margin: 0 0 8px; font-size: 2rem; }
+    h2 { margin: 34px 0 12px; font-size: 1.3rem; color: var(--accent); }
+    h3 { margin: 22px 0 8px; font-size: 1.05rem; }
+    p { margin: 8px 0 14px; }
+    .lead { color: var(--muted); font-size: 1.08rem; }
+
+    code {
+      padding: 0.12em 0.35em;
+      border-radius: 4px;
+      background: #eef1f4;
+      font-family: Consolas, "Courier New", monospace;
+      overflow-wrap: anywhere;
+    }
+
+    .box {
+      margin: 18px 0;
+      padding: 14px 16px;
+      border-left: 5px solid var(--accent);
+      border-radius: 6px;
+      background: var(--accent-soft);
+    }
+    .box.safe { border-left-color: var(--safe); background: var(--safe-soft); }
+    .box.warning { border-left-color: var(--warning); background: var(--warning-soft); }
+
+    table {
+      width: 100%;
+      margin: 14px 0 20px;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #eef3f7; }
+    ol, ul { padding-left: 24px; }
+    li + li { margin-top: 7px; }
+
+    pre {
+      margin: 12px 0;
+      padding: 14px 16px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #f7f9fb;
+      font-family: Consolas, "Courier New", monospace;
+      line-height: 1.45;
+    }
+
+    .flow {
+      display: grid;
+      gap: 7px;
+      margin: 16px 0;
+      text-align: center;
+    }
+    .flow div {
+      padding: 9px 12px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #f7f9fb;
+    }
+    .flow .arrow {
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    footer {
+      margin-top: 34px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    @media (max-width: 650px) {
+      main { width: 100%; margin: 0; padding: 24px 18px; border-radius: 0; }
+      table, tbody, tr, th, td { display: block; }
+      th { border-bottom: 0; }
+      tr + tr { margin-top: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Filme final schneiden</h1>
+      <p class="lead">Praxisanleitung für den automatischen CROP-Finalschnitt mit <code>Filme final schneiden.bat</code></p>
+    </header>
+
+    <section>
+      <h2>Aufgabe und Job-Auswahl</h2>
+      <p>Die Batch verarbeitet fertige Avidemux-CROP-Projekte aus dem Windows-Downloads-Ordner automatisch und streng nacheinander. Das Ergebnis sind final geschnittene MP4-Dateien unter <code>Downloads\Final</code>.</p>
+      <div class="box warning"><strong>Job-Marker:</strong> Verarbeitet werden ausschließlich Dateien nach dem Muster <code>*_Avidemux_CROP.py</code>. Projekte, deren Name <code>MANUELL</code> enthält, werden weder gezählt noch verarbeitet.</div>
+    </section>
+
+    <section>
+      <h2>Zuordnung der Dateien</h2>
+      <p>Aus dem Namen des CROP-Projekts leitet die Batch den Originalfilm und den unveränderten Namen der Finaldatei ab:</p>
+      <table>
+        <thead><tr><th>Rolle</th><th>Pfad</th></tr></thead>
+        <tbody>
+          <tr><td>CROP-Auftrag</td><td><code>Downloads\Filmname_Avidemux_CROP.py</code></td></tr>
+          <tr><td>Originalfilm</td><td><code>Downloads\Filmname.mp4</code></td></tr>
+          <tr><td>Fertiger Film</td><td><code>Downloads\Final\Filmname.mp4</code></td></tr>
+        </tbody>
+      </table>
+      <div class="box safe"><strong>Schutz der Originale:</strong> Die Batch verändert oder löscht niemals das Originalvideo, die originale <code>*_Avidemux_CROP.py</code> oder MANUELL-Dateien. Auch beim Fallback bleibt das Original vollständig erhalten.</div>
+    </section>
+
+    <section>
+      <h2>Normaler Verarbeitungsweg</h2>
+      <p>Der normale Avidemux-Weg ist immer der erste Versuch:</p>
+      <ol>
+        <li>Eine vorhandene Finaldatei wird mit <code>ffprobe</code> geprüft. Ist sie gültig, erhält der Film den Status <strong>BEREITS FERTIG</strong> und Avidemux wird nicht gestartet.</li>
+        <li>Andernfalls führt <code>avidemux_cli.exe</code> das vorhandene CROP-Projekt ohne GUI aus:</li>
+      </ol>
+      <pre>avidemux_cli.exe
+--run "&lt;Film&gt;_Avidemux_CROP.py"
+--save "&lt;temporäre Finaldatei&gt;"
+--quit</pre>
+      <ol start="3">
+        <li>Avidemux schreibt ausschließlich in eine eindeutige temporäre MP4 unter <code>Downloads\Final\_work</code>, niemals direkt in die endgültige Finaldatei.</li>
+        <li>Akzeptiert werden nur Exit-Code 0, eine vorhandene Datei mit mehr als 0 Byte sowie eine erfolgreiche <code>ffprobe</code>-Prüfung mit Videostream und positiver Laufzeit.</li>
+        <li>Erst danach wird die Datei sicher nach <code>Downloads\Final\&lt;Originaldateiname&gt;.mp4</code> übernommen.</li>
+      </ol>
+      <p>Alle Filme werden seriell verarbeitet. Ein Fehler bei einem Film stoppt den restlichen Sammellauf nicht.</p>
+    </section>
+
+    <section>
+      <h2>Automatische Erkennung eines MP4-Ladefehlers</h2>
+      <div class="box"><strong>Automatischer Rettungsweg:</strong> Kann Avidemux die MP4-Containerstruktur nicht laden oder parsen, obwohl die enthaltenen Medienströme grundsätzlich lesbar sind, versucht die Batch einmalig einen verlustfreien MKV-Fallback.</div>
+      <p>Der Fallback wird nicht bei jedem Avidemux-Fehler ausgelöst. Er kommt nur infrage, wenn alle folgenden Bedingungen erfüllt sind:</p>
+      <ul>
+        <li>Der normale Avidemux-Aufruf ist mit einem Exit-Code ungleich 0 fehlgeschlagen.</li>
+        <li>Im normalen Avidemux-Log fehlt <code>save--&gt;</code>; der eigentliche Speichervorgang hatte also noch nicht begonnen.</li>
+        <li>Es ist keine gültige normale temporäre Finaldatei entstanden.</li>
+        <li>Das Original wird vor dem Rettungsversuch mit <code>ffprobe</code> geprüft und besitzt einen Videostream sowie eine positive Laufzeit.</li>
+      </ul>
+      <p>Ein einzelner spezieller Avidemux-Logtext ist kein allgemeines Kriterium. Insbesondere löst <code>[STSD] Number of entries: 2</code> den Fallback nicht allein aus.</p>
+    </section>
+
+    <section>
+      <h2>Automatischer MKV-Fallback</h2>
+      <div class="flow" aria-label="Ablauf des MKV-Fallbacks">
+        <div>Original-MP4</div><div class="arrow">↓</div>
+        <div>Normaler Avidemux-Versuch</div><div class="arrow">↓ bei Lade-/Parsefehler vor save--&gt;</div>
+        <div>Original mit ffprobe prüfen</div><div class="arrow">↓</div>
+        <div>Verlustfrei nach MKV remuxen</div><div class="arrow">↓</div>
+        <div>MKV mit ffprobe validieren</div><div class="arrow">↓</div>
+        <div>Temporäre CROP-Projektkopie erzeugen</div><div class="arrow">↓</div>
+        <div>adm.loadVideo(...) auf die MKV umbiegen</div><div class="arrow">↓</div>
+        <div>Avidemux-Fallback starten</div><div class="arrow">↓</div>
+        <div>Temporäre Final-MP4 validieren</div><div class="arrow">↓</div>
+        <div>Nach Downloads\Final übernehmen</div>
+      </div>
+
+      <h3>Verlustfreier Remux</h3>
+      <p><code>ffmpeg.exe</code> wird bevorzugt im ComSkip-Ordner relativ zur Batch gesucht, danach über <code>PATH</code>. Der Aufruf verwendet Stream Copy:</p>
+      <pre>ffmpeg -hide_banner -nostdin -y
+-i "&lt;Original.mp4&gt;"
+-map 0:v:0 -map 0:a:0?
+-c copy
+"&lt;Fallback.mkv&gt;"</pre>
+      <p>Video und Audio werden nicht neu codiert. Bild- und Toninhalt bleiben erhalten; nur der Container wird von MP4 nach Matroska/MKV gewechselt. Das Original wird dabei weder verändert noch überschrieben.</p>
+
+      <h3>Warum kann das helfen?</h3>
+      <p>Manche MP4-Dateien besitzen eine Containerstruktur, die Avidemux nicht korrekt öffnen kann, obwohl Video und Audio intakt sind. ffmpeg kann die Ströme unter Umständen trotzdem lesen und unverändert in einen MKV-Container schreiben. Diese MKV-Zwischenquelle lässt sich anschließend von Avidemux verarbeiten.</p>
+
+      <h3>Temporäres Fallback-CROP-Projekt</h3>
+      <p>Die originale <code>&lt;Film&gt;_Avidemux_CROP.py</code> bleibt unverändert. Unter <code>Downloads\Final\_work</code> wird eine temporäre Projektkopie erzeugt. Nur der tatsächliche Quellpfad im eindeutig gefundenen <code>adm.loadVideo(...)</code>-Aufruf wird vom Original-MP4-Pfad auf die temporäre MKV umgestellt.</p>
+      <p>Andere Vorkommen desselben Pfads bleiben unverändert – zum Beispiel eine zweite Pfadnennung in einem Fehlertext. Kann genau dieser Quellaufruf nicht sicher und eindeutig gefunden werden, bricht der Fallback ab und das Originalprojekt bleibt unangetastet.</p>
+
+      <h3>Zweiter und letzter Avidemux-Versuch</h3>
+      <pre>avidemux_cli.exe
+--run "&lt;temporäres Fallback-Projekt&gt;"
+--save "&lt;temporäre Fallback-Finaldatei.mp4&gt;"
+--quit</pre>
+      <p>Auch dieser Aufruf läuft ohne GUI und schreibt seine vollständige Ausgabe ins Log. Pro Film gibt es höchstens einen normalen Avidemux-Versuch und einen MKV-Fallback-Versuch: keine Rekursion, keinen zweiten Remux und keinen dritten Avidemux-Aufruf.</p>
+    </section>
+
+    <section>
+      <h2>Validierung und sichere Übernahme</h2>
+      <p>Die MKV-Zwischenquelle und die temporäre Fallback-Final-MP4 werden jeweils mit derselben Sicherheitslogik geprüft: Datei lesbar, Videostream vorhanden und Laufzeit positiv; die Final-MP4 muss außerdem vorhanden und größer als 0 Byte sein. Nur eine vollständig validierte MP4 wird nach <code>Downloads\Final</code> übernommen.</p>
+      <p>Eine gültige bereits vorhandene Finaldatei wird übersprungen. Ist eine vorhandene Finaldatei ungültig, bleibt sie erhalten, bis eine neue Version erfolgreich erzeugt und validiert wurde.</p>
+    </section>
+
+    <section>
+      <h2>Dateien und Verzeichnisse</h2>
+      <table>
+        <thead><tr><th>Pfad oder Muster</th><th>Bedeutung</th></tr></thead>
+        <tbody>
+          <tr><td><code>Downloads\Final</code></td><td>Endgültige, validierte Filme mit unverändertem Originaldateinamen.</td></tr>
+          <tr><td><code>Downloads\Final\_work</code></td><td>Temporäre normale MP4, Probe-Daten und Fallback-Dateien.</td></tr>
+          <tr><td><code>&lt;Film&gt;.avidemux-work-&lt;ID&gt;.mp4</code></td><td>Normale temporäre Avidemux-Ausgabe.</td></tr>
+          <tr><td><code>&lt;Film&gt;.avidemux-fallback-source.&lt;ID&gt;.mkv</code></td><td>Verlustfrei remuxte MKV-Zwischenquelle.</td></tr>
+          <tr><td><code>&lt;Film&gt;.avidemux-fallback-project.&lt;ID&gt;.py</code></td><td>Temporäre CROP-Projektkopie mit MKV-Quelle.</td></tr>
+          <tr><td><code>&lt;Film&gt;.avidemux-fallback-final.&lt;ID&gt;.mp4</code></td><td>Temporäre Final-MP4 des Fallbacks.</td></tr>
+          <tr><td><code>Downloads\Final\_logs</code></td><td>Normale und Fallback-Protokolle.</td></tr>
+        </tbody>
+      </table>
+      <p>Nach einem erfolgreichen Fallback werden die MKV-Zwischenquelle und die temporäre Projektkopie gelöscht; die temporäre Finaldatei wurde nach <code>Final</code> verschoben. Logs bleiben erhalten. Bei Fehlern können diagnostisch relevante eigene Fallback-Dateien unter <code>_work</code> bestehen bleiben.</p>
+    </section>
+
+    <section>
+      <h2>Logs</h2>
+      <table>
+        <thead><tr><th>Logdatei</th><th>Inhalt</th></tr></thead>
+        <tbody>
+          <tr><td><code>Downloads\Final\_logs\&lt;Film&gt;.avidemux.log</code></td><td>Normaler Avidemux-Lauf, Exit-Code, Erkennung von <code>save--&gt;</code> und Fallback-Entscheidung.</td></tr>
+          <tr><td><code>Downloads\Final\_logs\&lt;Film&gt;.remux-fallback.log</code></td><td>Original-ffprobe, ffmpeg-Pfad und -Exit-Code sowie MKV-Validierung.</td></tr>
+          <tr><td><code>Downloads\Final\_logs\&lt;Film&gt;.avidemux-fallback.log</code></td><td>Temporäres Projekt, Avidemux-Fallback, Exit-Code, Finalvalidierung und Promotion nach Final.</td></tr>
+        </tbody>
+      </table>
+      <p>Die ausführlichen Ausgaben von Avidemux und ffmpeg erscheinen nicht auf der normalen Konsole, sondern vollständig in diesen Diagnose-Logs.</p>
+    </section>
+
+    <section>
+      <h2>Konsolenausgabe und Status</h2>
+      <p>Die Batch zeigt pro Film nur kompakte Statusmeldungen. Die aktuellen Meldungen umfassen:</p>
+      <pre>[3/19] "Film.mp4" ... OK
+[4/19] "Film.mp4" ... BEREITS FERTIG
+[5/19] "Film.mp4" ... FEHLER
+
+[6/19] "Film.mp4" ... MP4-LADEFEHLER
+       Fallback: Original mit ffprobe pruefen ...
+       Fallback: verlustfreier Remux nach MKV ...
+       Fallback: MKV OK
+       Fallback: CROP-Projekt vorbereitet
+       Fallback: Avidemux ...
+       FALLBACK ERFOLGREICH</pre>
+      <p>Scheitert der Rettungsweg, endet der Block mit <code>FALLBACK FEHLGESCHLAGEN</code>; danach wird automatisch der nächste Film verarbeitet.</p>
+
+      <h3>Abschlussübersicht</h3>
+      <pre>Filme final schneiden - abgeschlossen
+
+Gefunden:                 X
+Neu erstellt:             X
+Bereits fertig:           X
+Per Fallback gerettet:    X
+Fehler:                   X</pre>
+      <p>Bei Fehlern folgt zusätzlich <code>Fehlerhafte Filme:</code> mit den betroffenen Dateinamen.</p>
+      <div class="box warning"><strong>Fenster bleibt offen:</strong> Nach der Übersicht führt die Batch <code>pause</code> aus. Das Konsolenfenster bleibt stehen, damit Zusammenfassung und Fehler gelesen werden können, und schließt erst nach einem Tastendruck.</div>
+    </section>
+
+    <section>
+      <h2>Praxisbeispiel: automatisch geretteter Film</h2>
+      <p><code>2026-08-07_20-15_Pompo-The-Cinephile_pro-7-maxx_hq.mp4</code> ließ sich wegen seiner MP4-Containerstruktur weder im normalen automatischen Lauf noch direkt über die Avidemux-GUI korrekt öffnen. Der normale Avidemux-Aufruf endete vor <code>save--&gt;</code> mit Exit-Code 1.</p>
+      <p>Die Batch validierte das Original, remuxte Video und Audio unverändert mit <code>-c copy</code> nach MKV, validierte die MKV, erzeugte eine temporäre CROP-Projektkopie und änderte dort ausschließlich den eindeutigen <code>adm.loadVideo(...)</code>-Quellpfad. Der Fallback verarbeitete die CROP-Segmente vollständig: 137583 Frames, 0 missing PTS, Avidemux „Normal exit“, Exit-Code 0.</p>
+      <p>Die validierte Finaldatei mit ungefähr 01:31:43,6 wurde anschließend nach <code>Downloads\Final</code> übernommen; die ursprüngliche Aufnahme hatte ungefähr 01:58:17,4. Damit wurde das vorgesehene CROP-Projekt tatsächlich angewendet.</p>
+      <div class="box safe"><strong>Realer Sammeltest:</strong> Der endgültige Stand wurde mit 19 Filmen geprüft: 18 Filme liefen normal erfolgreich, Pompo wurde automatisch per MKV-Fallback gerettet – insgesamt 19/19 technisch erfolgreich.</div>
+    </section>
+
+    <section>
+      <h2>Typischer Ablauf</h2>
+      <ol>
+        <li>Film mit Comskip analysieren.</li>
+        <li>Schnittmarken in ComskipGUI einschließlich gewünschtem Filmanfang und Filmende kontrollieren oder final setzen.</li>
+        <li>Das CROP-Projekt erzeugen.</li>
+        <li>Für alle fertigen Filme <code>Filme final schneiden.bat</code> starten.</li>
+        <li>Normale Filme werden automatisch mit Avidemux CLI geschnitten.</li>
+        <li>Bei einem geeigneten Avidemux-MP4-Ladefehler versucht die Batch automatisch einmal den verlustfreien MKV-Fallback.</li>
+        <li>Erfolgreiche Filme liegen unter <code>Downloads\Final</code>, Protokolle unter <code>Downloads\Final\_logs</code>.</li>
+        <li>Am Ende bleibt das Fenster mit der Zusammenfassung bis zum Tastendruck geöffnet.</li>
+      </ol>
+    </section>
+
+    <footer>Diese Dokumentation wurde gegen den aktuellen Funktionsstand von <code>Filme final schneiden.bat</code> abgeglichen.</footer>
+  </main>
+</body>
+</html>

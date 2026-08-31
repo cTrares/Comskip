@@ -197,8 +197,7 @@ The current implementation should therefore be understood as an optimization for
 
 ```text
 branch: custom
-tag:    custom-2026-08-18
-commit: 665316ef0f50b565326171ec70b477461521652c
+tag:    custom-2026-08-31-v4-stable
 ```
 
 To restore this exact source revision:
@@ -206,13 +205,7 @@ To restore this exact source revision:
 ```bash
 git clone <repository-url>
 cd <repository-directory>
-git checkout custom-2026-08-18
-```
-
-or directly:
-
-```bash
-git checkout 665316ef0f50b565326171ec70b477461521652c
+git checkout custom-2026-08-31-v4-stable
 ```
 
 The stable tag is the preferred reference.
@@ -233,13 +226,13 @@ comskip-final.exe
 
 ```text
 comskip.exe
-49BDDC4A9EE48F2629E659E1D25CE5A28B508A42CBE9593CA30E3C72666616D5
+5E6634AA97F3F5C4BF01614114F32C1B7406E3F188C273FB4B3E70A36B2F5319
 
 ComskipGUI.exe
-53AADCF4BB86EFB83593128B70AC5CA4176E2DB0CF59D25A6B0579FA6E5061A8
+A92D4D6114789D61A220A6D7137822A89D4B92C4274C5257921B78DCFF0253A6
 
 comskip-final.exe
-B2AEC3D3F0DD2014E33F1C33B008BE28D41A369DAE3846326D7E6AA4820529FB
+F653870281A5CBE2ABC06728114426D2E6AB121AB4AC380F8D9686C8A59B8267
 ```
 
 ## GUI navigation change
@@ -257,9 +250,11 @@ The key direction now follows the timeline consistently.
 
 The source code for the final implementation is contained in this Comskip repository and does not depend on the external AdFinder repository at runtime.
 
-Before publishing exact fresh-clone build instructions, the build and packaging procedure for `comskip-final.exe` should be documented from the repository's actual build scripts and dependency setup rather than reconstructed from memory.
-
-A reproducible build description should state the exact MSYS build commands, Python version, OpenCV and NumPy requirements, packaging command used for `comskip-final.exe`, and portable deployment steps.
+Fresh-clone requirements, pinned Python dependencies and the complete Windows
+build/package command are documented in [`BUILDING.md`](BUILDING.md). On
+Windows, `.\tools\build_windows.ps1` builds the native programs, runs the
+Python tests, creates `comskip-final.exe` and assembles the portable runtime
+under `dist\ComSkip`.
 
 ## Development history
 

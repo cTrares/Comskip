@@ -1,0 +1,6 @@
+# Python 3.12 build environment for comskip-final.exe.
+# These versions are pinned so a fresh clone does not silently use a different
+# image-processing or packaging stack.
+numpy==2.4.4
+opencv-python-headless==4.14.0.94
+pyinstaller==6.22.2

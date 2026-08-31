@@ -30,3 +30,19 @@ comskip.c.save-failed
 # Eclipse IDE
 .cproject
 .project
+
+# Python caches and local test/build workspaces
+__pycache__/
+*.py[cod]
+/_temp/
+
+# Local build environments and packaged binary outputs
+/.codex-build-env/
+/dist/ComSkip V2/
+/dist/ComSkip v3/
+/dist/ComSkip v4/
+/dist/ComSkip/*.exe
+/dist/ComSkip/*.dll
+/dist/ComSkip/_Workflow/__pycache__/
+/tools/hybrid_logo/build/
+/tools/hybrid_logo/dist/
