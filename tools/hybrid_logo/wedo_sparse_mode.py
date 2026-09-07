@@ -1,6 +1,6 @@
-"""Experimental WeDo-only coarse discovery followed by local verification.
+"""Released WeDo-only coarse discovery followed by local verification.
 
-The released detector and other station profiles remain untouched. Only red
+The legacy detector and other station profiles remain available. Only red
 layout-confirmed intervals become internal cuts; raw logo misses merely open
 search windows. The caller falls back to the released WeDo pipeline on failure.
 """
@@ -180,7 +180,7 @@ def outer_intervals(observations: list[dict], metadata, candidates: list[dict]) 
 
 def run_wedo_sparse_mode(args, key: str, video: Path) -> dict:
     if not is_wedo_movies_video(video) or args.wedo_movies_mode != "active":
-        raise ValueError("Der WeDo-Testscanner ist ausschließlich für aktives WeDo freigegeben")
+        raise ValueError("Der WeDo-Scanner ist ausschließlich für aktives WeDo freigegeben")
     started = time.perf_counter()
     film_root = args.output_root / args.film_dirname
     film_root.mkdir(parents=True, exist_ok=True)
@@ -190,7 +190,7 @@ def run_wedo_sparse_mode(args, key: str, video: Path) -> dict:
     timings = {}
     capture = layout_capture = None
     try:
-        print("[Phase 2/5] WeDo-Test: normales Senderlogo in fünf Ausschnitten lernen", flush=True)
+        print("[Phase 2/5] WeDo: normales Senderlogo in fünf Ausschnitten lernen", flush=True)
         stage = time.perf_counter()
         capture, score_at_times, typical_score, learning = learn_macro_overlay_via_comskip(
             video=video, metadata=metadata, film_root=film_root, ffmpeg=args.ffmpeg,
@@ -199,14 +199,14 @@ def run_wedo_sparse_mode(args, key: str, video: Path) -> dict:
         if score_at_times is None or typical_score is None or typical_score < PRESENT_THRESHOLD:
             raise RuntimeError("Normales WeDo-Senderlogo nicht zuverlässig gelernt")
         timings["logo_learning"] = time.perf_counter() - stage
-        print("[Phase 3/5] WeDo-Test: Logo und rotes Layout im 20-Sekunden-Raster prüfen", flush=True)
+        print("[Phase 3/5] WeDo: Logo und rotes Layout im 20-Sekunden-Raster prüfen", flush=True)
         stage = time.perf_counter()
         observations, windows, coverage = coarse_discovery(video, metadata, score_at_times)
         timings["coarse_scan"] = time.perf_counter() - stage
         trace("WEDO_SPARSE_DISCOVERY", samples=len(observations), windows=windows, coverage=coverage)
         if not windows or coverage > MAX_LOCAL_COVERAGE:
             raise RuntimeError("WeDo-Stichproben ergeben keine ausreichend eingegrenzten Suchfenster")
-        print(f"[Phase 4/5] WeDo-Test: {len(windows)} Verdachtsbereiche lokal prüfen", flush=True)
+        print(f"[Phase 4/5] WeDo: {len(windows)} Verdachtsbereiche lokal prüfen", flush=True)
         stage = time.perf_counter()
         report = scan_layout_windows(video, args.ffmpeg, windows, video_duration, film_root)
         timings["local_layout_scan"] = time.perf_counter() - stage
@@ -216,7 +216,7 @@ def run_wedo_sparse_mode(args, key: str, video: Path) -> dict:
         refine_tails(report, video, metadata, film_root / "selected.logo.txt",
                      ffmpeg=args.ffmpeg, comskip=args.comskip, ini=args.ini, film_root=film_root)
         timings["local_tail_refinement"] = time.perf_counter() - stage
-        print("[Phase 5/5] WeDo-Test: bestätigte Blöcke ausgeben", flush=True)
+        print("[Phase 5/5] WeDo: bestätigte Blöcke ausgeben", flush=True)
         final_root = film_root / "final"
         final_root.mkdir(exist_ok=True)
         txt, edl = final_root / "final.txt", final_root / "final.edl"
@@ -239,7 +239,7 @@ def run_wedo_sparse_mode(args, key: str, video: Path) -> dict:
         }
         (film_root / "diagnostic.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         (final_root / "final.log").write_text(
-            f"WEDO TEST: {PROCESSING_MODE}\n"
+            f"WEDO: {PROCESSING_MODE}\n"
             f"Stichproben: {len(observations)}; lokale Fenster: {len(windows)}; Abdeckung: {coverage:.1%}\n"
             f"Bestaetigte rote Bloecke: {len(report['candidates'])}\n"
             "Dateiraender: grobe Logo-Marker, manuell pruefen.\n"
@@ -258,7 +258,7 @@ def run_wedo_with_fallback(args, key: str, video: Path, legacy_runner) -> dict:
         return run_wedo_sparse_mode(args, key, video)
     except Exception as exc:
         reason = f"{type(exc).__name__}: {exc}"
-        print(f"WeDo-Test: Rückfall auf bisherigen WeDo-Weg ({reason})", flush=True)
+        print(f"WeDo: Rückfall auf bisherigen WeDo-Weg ({reason})", flush=True)
         film_root = args.output_root / args.film_dirname
         if film_root.exists():
             # Keep the failed attempt for diagnostics, outside the legacy run directory.

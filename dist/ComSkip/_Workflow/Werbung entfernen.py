@@ -18,7 +18,7 @@ try:
 except ImportError:
     winreg = None
 
-BUILD_ID = "2026-08-30-COMSKIP-V4-SESSION-FOLDER-COMPACT-PHASES"
+BUILD_ID = "2026-09-07-COMSKIP-V4.1-FINAL"
 APPROVED_SUFFIX = "_Avidemux.py"
 START_SUFFIX = "_Avidemux_Start.bat"
 CROP_SUFFIX = "_Avidemux_CROP.py"

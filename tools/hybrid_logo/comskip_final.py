@@ -43,7 +43,7 @@ from commercial_macro_mode import (
 )
 
 
-VERSION = "Comskip V4 2026-08-30 isolated-profiles structural-repair-6 / WeDo sparse-local test / video-end-fix-1 / native-tail-2"
+VERSION = "Comskip V4.1 FINAL 2026-09-07 / WeDo local-native / video-end-fix-1"
 _ACTIVE_TRACE: "ExitTrace | None" = None
 RUN_DIRECTORY_NAME = "r"
 FILM_DIRECTORY_NAME = "run"
@@ -133,7 +133,7 @@ def parse_args() -> argparse.Namespace:
         "--wedo-scan",
         choices=("sparse", "legacy"),
         default="sparse",
-        help="WeDo-only experimental sparse/local scan, or the unchanged legacy WeDo pipeline.",
+        help="WeDo local discovery with native tail verification, or the legacy WeDo pipeline.",
     )
     parser.add_argument(
         "--commercial-edge-refiner-mode",
@@ -658,7 +658,7 @@ def main() -> int:
         elif is_wedo_movies:
             sparse_wedo = wedo_movies_mode == "active" and getattr(args, "wedo_scan", "sparse") == "sparse"
             phase(1, 5 if sparse_wedo else 7, "Moduswahl",
-                  "WeDo-Test: grobe Suche und lokale Prüfung" if sparse_wedo else "WeDo-Movies-Spezialworkflow")
+                  "WeDo: grobe Suche und lokale Prüfung" if sparse_wedo else "WeDo-Movies-Spezialworkflow")
         else:
             phase(1, 6, "Moduswahl", "vollständige Comskip-Analyse")
         print(f"Aufnahme: {compact_video_label(video)}", flush=True)

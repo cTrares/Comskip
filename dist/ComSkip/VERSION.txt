@@ -1,0 +1,7 @@
+ComSkip V4.1 FINAL
+Stand: 2026-09-07
+Git-Tag: v4.1-final-2026-09-07
+Freigegebene Basis: WeDo-v3-Test mit lokaler nativer Werbeendprüfung
+Abdeckungsgrenze: 60 Prozent
+Keine Änderungen an Erkennungsparametern gegenüber dem akzeptierten Teststand.
+Start: _Workflow\Werbung entfernen Start.bat

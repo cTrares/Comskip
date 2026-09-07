@@ -57,23 +57,25 @@ class WedoSparseTests(unittest.TestCase):
             self.assertTrue((root / "wedo-sparse-attempt" / "partial.txt").is_file())
             self.assertIn("uncertain", json.loads((film / "diagnostic.json").read_text())["wedo_sparse_fallback"]["reason"])
 
-    def test_test_launcher_routes_only_wedo_to_test_exe(self):
-        source = Path(__file__).resolve().parents[2] / "dist/ComSkip/_Workflow/Werbung entfernen WeDo-Test.py"
+    def test_normal_workflow_uses_final_launcher_for_all_profiles(self):
+        source = Path(__file__).resolve().parents[2] / "dist/ComSkip/_Workflow/Werbung entfernen.py"
         entry = runpy.run_path(str(source))
+        session = entry["run_session"]
+        namespace = session.__globals__
+        videos = [Path(name) for name in ("Film_wedo-movies_hd.mp4", "Film_arte_hd.mp4", "Film_pro-7_hq.mp4")]
         calls = []
-        namespace = {"run_comskip_compact": lambda *args: calls.append(args)}
-        exec("def run_session(): pass\n", namespace)
-
-        def workflow_main():
-            for filename in ("Film_wedo-movies_hd.mp4", "Film_arte_hd.mp4", "Film_pro-7_hq.mp4"):
-                namespace["run_comskip_compact"](Path("stable.exe"), Path(filename), Path("."), 1, 1)
-            return 0
-
-        with mock.patch("runpy.run_path", return_value={"run_session": namespace["run_session"], "main": workflow_main}), \
-                mock.patch.object(Path, "is_file", return_value=True):
-            self.assertEqual(entry["main"](), 0)
-        self.assertEqual(calls[0][0].name, "comskip-wedo-test.exe")
-        self.assertEqual([call[0].name for call in calls[1:]], ["stable.exe", "stable.exe"])
+        replacements = {
+            "_SESSION_DIRECTORY": source.parent,
+            "find_videos": lambda directory: videos,
+            "ask_start_mode": lambda *args: "n",
+            "analyse_video": lambda *args: calls.append(args),
+            "workflow_status": lambda videos: (3, 0, 3),
+        }
+        with mock.patch.dict(namespace, replacements), mock.patch("builtins.input", return_value=""):
+            self.assertEqual(session(), 0)
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all(call[0].name == "comskip-final.exe" for call in calls))
+        self.assertEqual([call[1] for call in calls], videos)
 
     def test_local_decoder_preserves_absolute_time_and_excludes_other_windows(self):
         ffmpeg = Path(__file__).resolve().parents[2] / "dist/ComSkip/ffmpeg.exe"
