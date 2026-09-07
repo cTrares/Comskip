@@ -43,7 +43,7 @@ from commercial_macro_mode import (
 )
 
 
-VERSION = "Comskip V4 2026-08-30 isolated-profiles structural-repair-6"
+VERSION = "Comskip V4 2026-08-30 isolated-profiles structural-repair-6 / video-end-fix-1"
 _ACTIVE_TRACE: "ExitTrace | None" = None
 RUN_DIRECTORY_NAME = "r"
 FILM_DIRECTORY_NAME = "run"
