@@ -49,6 +49,35 @@ def candidate_windows(observations: list[dict], duration: float) -> list[tuple[i
     return windows
 
 
+def coarse_discovery(video: Path, metadata, score_at_times, *, on_observation=None):
+    """Shared unchanged v3 sampling for the scanner and the read-only diagnostic."""
+    capture = cv2.VideoCapture(str(video))
+    config = WedoMoviesConfig()
+    observations = []
+    try:
+        for second in sample_seconds_within_video(
+                metadata.duration_seconds, metadata.total_frames, metadata.fps, SAMPLE_SECONDS):
+            seconds = float(second)
+            score = score_at_times([seconds]).get(seconds)
+            frame = read_frame_at(capture, seconds)
+            if score is None or frame is None:
+                raise RuntimeError(f"Unvollständige WeDo-Stichprobe bei {seconds} Sekunden")
+            small = cv2.resize(frame, (config.analysis_width, config.analysis_height), interpolation=cv2.INTER_AREA)
+            sample = layout_sample(small, int(second), config)
+            red = is_layout_present(sample, config)
+            observation = {"seconds": seconds, "logo_score": score,
+                           "logo_present": score >= PRESENT_THRESHOLD, "red_layout": red}
+            observations.append(observation)
+            if on_observation is not None:
+                on_observation(observation, frame, small, sample)
+    finally:
+        capture.release()
+    duration = min(metadata.duration_seconds, metadata.total_frames / metadata.fps)
+    windows = candidate_windows(observations, duration)
+    coverage = sum(min(end, duration) - start for start, end in windows) / duration
+    return observations, windows, coverage
+
+
 def scan_layout_windows(video: Path, ffmpeg: Path, windows: list[tuple[int, int]],
                         duration: float, film_root: Path) -> dict:
     config = WedoMoviesConfig()
@@ -172,22 +201,7 @@ def run_wedo_sparse_mode(args, key: str, video: Path) -> dict:
         timings["logo_learning"] = time.perf_counter() - stage
         print("[Phase 3/5] WeDo-Test: Logo und rotes Layout im 20-Sekunden-Raster prüfen", flush=True)
         stage = time.perf_counter()
-        layout_capture = cv2.VideoCapture(str(video))
-        config = WedoMoviesConfig()
-        observations = []
-        for second in sample_seconds_within_video(
-                metadata.duration_seconds, metadata.total_frames, metadata.fps, SAMPLE_SECONDS):
-            seconds = float(second)
-            score = score_at_times([seconds]).get(seconds)
-            frame = read_frame_at(layout_capture, seconds)
-            if score is None or frame is None:
-                raise RuntimeError(f"Unvollständige WeDo-Stichprobe bei {seconds} Sekunden")
-            small = cv2.resize(frame, (config.analysis_width, config.analysis_height), interpolation=cv2.INTER_AREA)
-            red = is_layout_present(layout_sample(small, int(second), config), config)
-            observations.append({"seconds": seconds, "logo_score": score,
-                                 "logo_present": score >= PRESENT_THRESHOLD, "red_layout": red})
-        windows = candidate_windows(observations, video_duration)
-        coverage = sum(min(end, video_duration) - start for start, end in windows) / video_duration
+        observations, windows, coverage = coarse_discovery(video, metadata, score_at_times)
         timings["coarse_scan"] = time.perf_counter() - stage
         trace("WEDO_SPARSE_DISCOVERY", samples=len(observations), windows=windows, coverage=coverage)
         if not windows or coverage > MAX_LOCAL_COVERAGE:
