@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -426,6 +427,11 @@ def _find_branded_bumper_cut(
     try:
         if not capture.isOpened():
             return None
+        count = capture.get(cv2.CAP_PROP_FRAME_COUNT)
+        if math.isfinite(count) and count >= 1:
+            stop_frame = min(stop_frame, int(count) - 1)
+            if start_frame > stop_frame:
+                return None
         capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         frame_number = start_frame
         while frame_number <= stop_frame:
