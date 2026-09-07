@@ -43,7 +43,7 @@ from commercial_macro_mode import (
 )
 
 
-VERSION = "Comskip V4 2026-08-30 isolated-profiles structural-repair-6"
+VERSION = "Comskip V4 2026-08-30 isolated-profiles structural-repair-6 / WeDo sparse-local test"
 _ACTIVE_TRACE: "ExitTrace | None" = None
 RUN_DIRECTORY_NAME = "r"
 FILM_DIRECTORY_NAME = "run"
@@ -128,6 +128,12 @@ def parse_args() -> argparse.Namespace:
         choices=("off", "shadow", "active"),
         default="active",
         help="WeDo Movies special detector mode; ignored for filenames without exact 'wedo-movies'.",
+    )
+    parser.add_argument(
+        "--wedo-scan",
+        choices=("sparse", "legacy"),
+        default="sparse",
+        help="WeDo-only experimental sparse/local scan, or the unchanged legacy WeDo pipeline.",
     )
     parser.add_argument(
         "--commercial-edge-refiner-mode",
@@ -650,7 +656,9 @@ def main() -> int:
             print("=" * 72, flush=True)
             phase(1, 6, "Moduswahl", "kommerzieller Logo-Makromodus")
         elif is_wedo_movies:
-            phase(1, 7, "Moduswahl", "WeDo-Movies-Spezialworkflow")
+            sparse_wedo = wedo_movies_mode == "active" and getattr(args, "wedo_scan", "sparse") == "sparse"
+            phase(1, 5 if sparse_wedo else 7, "Moduswahl",
+                  "WeDo-Test: grobe Suche und lokale Prüfung" if sparse_wedo else "WeDo-Movies-Spezialworkflow")
         else:
             phase(1, 6, "Moduswahl", "vollständige Comskip-Analyse")
         print(f"Aufnahme: {compact_video_label(video)}", flush=True)
@@ -703,6 +711,10 @@ def main() -> int:
                         reason="MAKROMODUS_OHNE_SCHNITTBLOCK",
                         macro_runtime_seconds=time.perf_counter() - macro_started,
                     )
+        elif is_wedo_movies and wedo_movies_mode == "active" and getattr(args, "wedo_scan", "sparse") == "sparse":
+            from wedo_sparse_mode import run_wedo_with_fallback
+
+            result = run_wedo_with_fallback(run_args, video.stem, video, run_film)
         else:
             result = run_film(run_args, video.stem, video)
         trace.mark("RUN_FILM_RETURNED", final_stage=result.get("final_stage_intervals"))
