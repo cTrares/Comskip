@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+from video_frame_bounds import last_frame_seconds
 
 
 SAMPLE_ZONE_WIDTH = 420
@@ -80,8 +83,22 @@ def seconds_to_display(seconds: float) -> str:
 
 
 def read_frame_at(capture: cv2.VideoCapture, seconds: float):
+    """Read a timestamp, bounding end-of-file requests to the last video frame.
+
+    Container/audio duration can exceed video duration. Normal in-range seeks
+    retain their timing; decoder errors inside the video still return None.
+    """
     try:
-        capture.set(cv2.CAP_PROP_POS_MSEC, seconds * 1000)
+        if not math.isfinite(seconds) or seconds < 0:
+            return None
+        count = capture.get(cv2.CAP_PROP_FRAME_COUNT)
+        fps = capture.get(cv2.CAP_PROP_FPS)
+        if (math.isfinite(count) and count >= 1 and math.isfinite(fps) and fps > 0
+                and seconds >= last_frame_seconds(int(count), fps)):
+            # Frame addressing avoids timestamp rounding to the nonexistent Nth frame.
+            capture.set(cv2.CAP_PROP_POS_FRAMES, int(count) - 1)
+        else:
+            capture.set(cv2.CAP_PROP_POS_MSEC, seconds * 1000)
         ok, frame = capture.read()
     except Exception:
         return None
