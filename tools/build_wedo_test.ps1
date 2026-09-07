@@ -14,7 +14,7 @@ $env:TEMP = $buildRoot
 $env:TMP = $buildRoot
 $env:PYINSTALLER_CONFIG_DIR = Join-Path $buildRoot "cache"
 try {
-    & $Python -B -c "import sys,unittest; sys.path.insert(0, sys.argv[1]); names=['test_wedo_sparse_mode','test_wedo_movies_detector','test_wedo_movies_tail','test_comskip_final','test_commercial_macro_mode','test_public_broadcaster_fast_mode']; result=unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromNames(names)); sys.exit(not result.wasSuccessful())" $sourceRoot
+    & $Python -B -c "import sys,unittest; sys.path.insert(0, sys.argv[1]); names=['test_video_end_bounds','test_wedo_sparse_mode','test_wedo_movies_detector','test_wedo_movies_tail','test_comskip_final','test_commercial_macro_mode','test_public_broadcaster_fast_mode','test_hybrid_logo_analysis','test_internal_logo_parallel_score']; result=unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromNames(names)); sys.exit(not result.wasSuccessful())" $sourceRoot
     if ($LASTEXITCODE -ne 0) { throw "WeDo regression tests failed." }
     & $Python -B -m PyInstaller --noconfirm --clean --onefile --name comskip-wedo-test `
         --paths $sourceRoot --specpath $buildRoot --workpath (Join-Path $buildRoot "work") `

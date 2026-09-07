@@ -39,6 +39,23 @@ class WedoSparseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "fehlt"):
             sparse.first_logo_return(lambda times: {}, 100, 110, 25)
 
+    def test_local_tail_ends_on_last_frame_and_finds_fractional_return(self):
+        requests = []
+
+        def score(times):
+            requests.extend(times)
+            self.assertLessEqual(max(times), 103.96)
+            return {t: .8 if t >= 103.92 else .1 for t in times}
+
+        result = sparse.first_logo_return(score, 100, 104.02, 25, total_frames=2600)
+        self.assertAlmostEqual(result, 103.92)
+        self.assertIn(103.96, requests)
+
+    def test_local_tail_after_last_frame_never_reads(self):
+        score = mock.Mock()
+        self.assertIsNone(sparse.first_logo_return(score, 104, 104.02, 25, total_frames=2600))
+        score.assert_not_called()
+
     def test_non_wedo_is_refused_before_any_io(self):
         with self.assertRaises(ValueError):
             sparse.run_wedo_sparse_mode(argparse.Namespace(wedo_movies_mode="active"),
@@ -117,10 +134,12 @@ class WedoSparseTests(unittest.TestCase):
                                       ffprobe=Path("ffprobe"), comskip=Path("comskip"), ini=Path("ini"),
                                       wedo_movies_mode="active")
             metadata = VideoMetadata(
-                duration_seconds=1200, fps=25, total_frames=30000, width=320, height=180)
+                duration_seconds=1200.02, fps=25, total_frames=30000, width=320, height=180)
             report = {"candidates": [dict(start_seconds=399, end_seconds=513, last_layout_second=510)],
                       "duration_seconds": 1200, "activation": {"matched": True}}
-            score = lambda times: {t: 0.1 if 400 <= t <= 500 else 0.8 for t in times}
+            def score(times):
+                self.assertLess(max(times), 1200, "Must not read the exclusive video endpoint")
+                return {t: 0.1 if 400 <= t <= 500 else 0.8 for t in times}
             with mock.patch.object(sparse, "probe_video", return_value=metadata), \
                     mock.patch.object(sparse, "learn_macro_overlay_via_comskip", return_value=(mock.Mock(), score, .8, {})), \
                     mock.patch.object(sparse.cv2, "VideoCapture", return_value=mock.Mock()), \

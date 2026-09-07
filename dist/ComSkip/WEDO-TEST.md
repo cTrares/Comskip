@@ -2,7 +2,9 @@
 
 Branch: `feature/wedo-sparse-local`, Ausgangsstand: `3ac73d7` auf `custom`.
 
-Die vorhandene `comskip-final.exe` und der normale Start bleiben unverändert.
+Die `comskip-final.exe` behält den bisherigen Erkennungsweg. Beide EXEs enthalten
+seit `video-end-fix-1` die Begrenzung von Lesezugriffen auf vorhandene Videoframes.
+Der normale Starter bleibt unverändert.
 Der Testbuild heißt `comskip-wedo-test.exe`. Zum Testen den separaten Starter
 `_Workflow/Werbung entfernen WeDo-Test Start.bat` öffnen. Dieser verwendet die
 Test-EXE ausschließlich für Dateinamen mit `wedo-movies`; alle anderen Sender
@@ -41,6 +43,14 @@ automatische Sicherung vorheriger Ergebnisse den Workflow mit `R` verwenden.
 
 Die Trefferqualität und die tatsächliche Zeitersparnis sind noch mit echten
 Aufnahmen zu vergleichen. Es wurden keine produktiven Filme automatisch getestet.
+
+Die acht Rückfälle aus dem ersten Vergleichslauf wurden durch eine Stichprobe
+am exklusiven Videoende ausgelöst: Die Containerdauer war wenige Millisekunden
+länger als die Videospur. Das globale Raster und die lokale Logo-Endprüfung
+verwenden jetzt höchstens `(Frameanzahl - 1) / fps` als Lesezeitpunkt. Gemeinsame
+Einzelbildabfragen und die Bumper-Prüfung sind ebenfalls begrenzt. Die ersten
+und letzten sechs Minuten bleiben vom Logo-Lernen ausgeschlossen. Echte
+Lesefehler innerhalb des Videos lösen weiterhin den bisherigen Rückfall aus.
 
 Reproduzierbarer separater Build aus dem Repository (Python mit den Paketen
 aus `requirements-build.txt`): `tools/build_wedo_test.ps1 -Python <python.exe>`.

@@ -17,6 +17,7 @@ from pathlib import Path
 from commercial_macro_mode import learn_macro_overlay_via_comskip
 from internal_logo_sensor import read_frame_at
 from public_broadcaster_fast_mode import probe_video
+from video_frame_bounds import last_frame_seconds, sample_seconds_within_video
 from wedo_movies_detector import (
     WedoMoviesConfig, _find_branded_bumper_cut, apply_wedo_movies_intervals,
     candidates_from_samples, cv2, is_layout_present, is_wedo_movies_video,
@@ -106,16 +107,25 @@ def scan_layout_windows(video: Path, ffmpeg: Path, windows: list[tuple[int, int]
     }
 
 
-def first_logo_return(score_at_times, start: float, end: float, fps: float) -> float | None:
+def first_logo_return(score_at_times, start: float, end: float, fps: float,
+                      *, total_frames: int | None = None) -> float | None:
     """One-second search, then frame resolution only in the first return bracket."""
+    if total_frames is not None:
+        end = min(end, last_frame_seconds(total_frames, fps))
+    if start > end:
+        return None
     previous = start
-    for second in range(math.ceil(start), math.floor(end) + 1):
+    times = list(range(math.ceil(start), math.floor(end) + 1))
+    # Include a final fractional second, but never the exclusive video endpoint.
+    if not times or times[-1] < end:
+        times.append(end)
+    for second in times:
         score = score_at_times([float(second)]).get(float(second))
         if score is None:
             raise RuntimeError("Logo-Messung in lokaler WeDo-Endprüfung fehlt")
         if score >= PRESENT_THRESHOLD:
-            first = math.ceil(previous * fps)
-            last = math.floor(second * fps)
+            first = math.ceil(previous * fps - 1e-6)
+            last = math.floor(second * fps + 1e-6)
             for frame in range(first, last + 1):
                 seconds = frame / fps
                 value = score_at_times([seconds]).get(seconds)
@@ -133,7 +143,8 @@ def refine_tails(report: dict, video: Path, metadata, mask_path: Path, score_at_
         original_end = candidate["end_seconds"]
         layout_end = candidate["last_layout_second"] + 1.0
         limit = min(metadata.duration_seconds, layout_end + 180.0)
-        returned = first_logo_return(score_at_times, layout_end, limit, metadata.fps)
+        returned = first_logo_return(score_at_times, layout_end, limit, metadata.fps,
+                                     total_frames=metadata.total_frames)
         # Missing return is ambiguous; let the caller use the established path.
         if returned is None:
             raise RuntimeError("Keine sichere Logo-Rückkehr im lokalen WeDo-Nachlauf")
@@ -142,7 +153,8 @@ def refine_tails(report: dict, video: Path, metadata, mask_path: Path, score_at_
             logo_return_seconds=returned, logo_mask_path=mask_path,
         )
         end = bumper.commercial_end_frame / metadata.fps if bumper else returned
-        candidate["end_seconds"] = round(min(metadata.duration_seconds, max(original_end, end)), 6)
+        video_end = min(metadata.duration_seconds, metadata.total_frames / metadata.fps)
+        candidate["end_seconds"] = round(min(video_end, max(original_end, end)), 6)
         candidate["duration_seconds"] = round(candidate["end_seconds"] - candidate["start_seconds"], 6)
         candidate["program_hint_tail"] = {
             "normal_logo_return_seconds": returned,
@@ -159,7 +171,8 @@ def outer_intervals(observations: list[dict], metadata, candidates: list[dict]) 
         raise RuntimeError("Kein verlässliches normales WeDo-Filmlogo")
     # Keep uncertain edge crops as one-frame navigation handles, not long cuts.
     start = min(present)
-    end = min(metadata.duration_seconds, max(present) + SAMPLE_SECONDS)
+    end = min(metadata.duration_seconds, metadata.total_frames / metadata.fps,
+              max(present) + SAMPLE_SECONDS)
     left = round(start * metadata.fps) if start <= 15 * 60 else 1
     right = round(end * metadata.fps) if metadata.duration_seconds - end <= 30 * 60 else metadata.total_frames
     proposed = [(1, max(1, left)), (max(1, right), metadata.total_frames)]
@@ -175,6 +188,7 @@ def run_wedo_sparse_mode(args, key: str, video: Path) -> dict:
     film_root = args.output_root / args.film_dirname
     film_root.mkdir(parents=True, exist_ok=True)
     metadata = probe_video(args.ffprobe, video)
+    video_duration = min(metadata.duration_seconds, metadata.total_frames / metadata.fps)
     trace = getattr(args, "exit_trace", lambda *_a, **_kw: None)
     timings = {}
     capture = layout_capture = None
@@ -193,25 +207,26 @@ def run_wedo_sparse_mode(args, key: str, video: Path) -> dict:
         layout_capture = cv2.VideoCapture(str(video))
         config = WedoMoviesConfig()
         observations = []
-        for second in range(0, math.ceil(metadata.duration_seconds), SAMPLE_SECONDS):
+        for second in sample_seconds_within_video(
+                metadata.duration_seconds, metadata.total_frames, metadata.fps, SAMPLE_SECONDS):
             seconds = float(second)
             score = score_at_times([seconds]).get(seconds)
             frame = read_frame_at(layout_capture, seconds)
             if score is None or frame is None:
                 raise RuntimeError(f"Unvollständige WeDo-Stichprobe bei {seconds} Sekunden")
             small = cv2.resize(frame, (config.analysis_width, config.analysis_height), interpolation=cv2.INTER_AREA)
-            red = is_layout_present(layout_sample(small, second, config), config)
+            red = is_layout_present(layout_sample(small, int(second), config), config)
             observations.append({"seconds": seconds, "logo_score": score,
                                  "logo_present": score >= PRESENT_THRESHOLD, "red_layout": red})
-        windows = candidate_windows(observations, metadata.duration_seconds)
-        coverage = sum(end - start for start, end in windows) / metadata.duration_seconds
+        windows = candidate_windows(observations, video_duration)
+        coverage = sum(min(end, video_duration) - start for start, end in windows) / video_duration
         timings["coarse_scan"] = time.perf_counter() - stage
         trace("WEDO_SPARSE_DISCOVERY", samples=len(observations), windows=windows, coverage=coverage)
         if not windows or coverage > MAX_LOCAL_COVERAGE:
             raise RuntimeError("WeDo-Stichproben ergeben keine ausreichend eingegrenzten Suchfenster")
         print(f"[Phase 4/5] WeDo-Test: {len(windows)} Verdachtsbereiche lokal prüfen", flush=True)
         stage = time.perf_counter()
-        report = scan_layout_windows(video, args.ffmpeg, windows, metadata.duration_seconds, film_root)
+        report = scan_layout_windows(video, args.ffmpeg, windows, video_duration, film_root)
         timings["local_layout_scan"] = time.perf_counter() - stage
         if not report["candidates"]:
             raise RuntimeError("Keine bestätigten roten WeDo-Blöcke im lokalen Scan")
@@ -235,6 +250,7 @@ def run_wedo_sparse_mode(args, key: str, video: Path) -> dict:
             "video_metadata": asdict(metadata), "final_stage_intervals": fusion["fused_intervals"],
             "runtime_seconds": timings, "logo_learning": learning,
             "coarse_sample_seconds": SAMPLE_SECONDS, "coarse_observations": observations,
+            "last_valid_sample_seconds": last_frame_seconds(metadata.total_frames, metadata.fps),
             "local_coverage": coverage, "outer_crops": "coarse-logo-edge-markers",
             "wedo_movies": {"mode": "active", "report": report, "fusion": fusion},
         }
