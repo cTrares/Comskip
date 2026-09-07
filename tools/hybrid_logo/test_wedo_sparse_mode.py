@@ -24,38 +24,6 @@ class WedoSparseTests(unittest.TestCase):
                 dict(seconds=990, logo_present=True, red_layout=True)]
         self.assertEqual(sparse.candidate_windows(rows, 1000), [(0, 165), (835, 1000)])
 
-    def test_tail_only_refines_first_one_second_bracket(self):
-        requests = []
-
-        def score(times):
-            requests.extend(times)
-            return {t: 0.8 if t >= 103.4 else 0.1 for t in times}
-
-        self.assertAlmostEqual(sparse.first_logo_return(score, 100, 280, 25), 103.4)
-        self.assertLess(len(requests), 35)
-        self.assertLessEqual(max(requests), 104)
-
-    def test_missing_measurement_is_not_silently_skipped(self):
-        with self.assertRaisesRegex(RuntimeError, "fehlt"):
-            sparse.first_logo_return(lambda times: {}, 100, 110, 25)
-
-    def test_local_tail_ends_on_last_frame_and_finds_fractional_return(self):
-        requests = []
-
-        def score(times):
-            requests.extend(times)
-            self.assertLessEqual(max(times), 103.96)
-            return {t: .8 if t >= 103.92 else .1 for t in times}
-
-        result = sparse.first_logo_return(score, 100, 104.02, 25, total_frames=2600)
-        self.assertAlmostEqual(result, 103.92)
-        self.assertIn(103.96, requests)
-
-    def test_local_tail_after_last_frame_never_reads(self):
-        score = mock.Mock()
-        self.assertIsNone(sparse.first_logo_return(score, 104, 104.02, 25, total_frames=2600))
-        score.assert_not_called()
-
     def test_non_wedo_is_refused_before_any_io(self):
         with self.assertRaises(ValueError):
             sparse.run_wedo_sparse_mode(argparse.Namespace(wedo_movies_mode="active"),

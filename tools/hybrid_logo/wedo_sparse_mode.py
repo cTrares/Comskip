@@ -19,15 +19,17 @@ from internal_logo_sensor import read_frame_at
 from public_broadcaster_fast_mode import probe_video
 from video_frame_bounds import last_frame_seconds, sample_seconds_within_video
 from wedo_movies_detector import (
-    WedoMoviesConfig, _find_branded_bumper_cut, apply_wedo_movies_intervals,
+    WedoMoviesConfig, extend_wedo_movies_program_hint_tails, apply_wedo_movies_intervals,
     candidates_from_samples, cv2, is_layout_present, is_wedo_movies_video,
     layout_sample, np,
 )
 
+from wedo_native_tail import measure_tail
+
 SAMPLE_SECONDS = 20
 PRESENT_THRESHOLD = 0.42
 MAX_LOCAL_COVERAGE = 0.60
-PROCESSING_MODE = "wedo-sparse-local-v1"
+PROCESSING_MODE = "wedo-sparse-local-native-tail-v2"
 
 
 def candidate_windows(observations: list[dict], duration: float) -> list[tuple[int, int]]:
@@ -107,61 +109,27 @@ def scan_layout_windows(video: Path, ffmpeg: Path, windows: list[tuple[int, int]
     }
 
 
-def first_logo_return(score_at_times, start: float, end: float, fps: float,
-                      *, total_frames: int | None = None) -> float | None:
-    """One-second search, then frame resolution only in the first return bracket."""
-    if total_frames is not None:
-        end = min(end, last_frame_seconds(total_frames, fps))
-    if start > end:
-        return None
-    previous = start
-    times = list(range(math.ceil(start), math.floor(end) + 1))
-    # Include a final fractional second, but never the exclusive video endpoint.
-    if not times or times[-1] < end:
-        times.append(end)
-    for second in times:
-        score = score_at_times([float(second)]).get(float(second))
-        if score is None:
-            raise RuntimeError("Logo-Messung in lokaler WeDo-Endprüfung fehlt")
-        if score >= PRESENT_THRESHOLD:
-            first = math.ceil(previous * fps - 1e-6)
-            last = math.floor(second * fps + 1e-6)
-            for frame in range(first, last + 1):
-                seconds = frame / fps
-                value = score_at_times([seconds]).get(seconds)
-                if value is None:
-                    raise RuntimeError("Logo-Messung an der WeDo-Schnittkante fehlt")
-                if value >= PRESENT_THRESHOLD:
-                    return seconds
-            return float(second)
-        previous = float(second)
-    return None
-
-
-def refine_tails(report: dict, video: Path, metadata, mask_path: Path, score_at_times) -> None:
-    for candidate in report["candidates"]:
-        original_end = candidate["end_seconds"]
-        layout_end = candidate["last_layout_second"] + 1.0
-        limit = min(metadata.duration_seconds, layout_end + 180.0)
-        returned = first_logo_return(score_at_times, layout_end, limit, metadata.fps,
-                                     total_frames=metadata.total_frames)
-        # Missing return is ambiguous; let the caller use the established path.
-        if returned is None:
-            raise RuntimeError("Keine sichere Logo-Rückkehr im lokalen WeDo-Nachlauf")
-        bumper = _find_branded_bumper_cut(
-            video_path=video, fps=metadata.fps, earliest_seconds=original_end,
-            logo_return_seconds=returned, logo_mask_path=mask_path,
+def refine_tails(report: dict, video: Path, metadata, mask_path: Path, *,
+                 ffmpeg: Path, comskip: Path, ini: Path, film_root: Path) -> None:
+    for index, candidate in enumerate(report["candidates"]):
+        sidecar, measurement = measure_tail(
+            video=video, metadata=metadata, layout_end=candidate["last_layout_second"] + 1.0,
+            mask=mask_path, ffmpeg=ffmpeg, comskip=comskip, ini=ini,
+            output=film_root / "native-tails" / f"tail-{index + 1:02d}",
         )
-        end = bumper.commercial_end_frame / metadata.fps if bumper else returned
-        video_end = min(metadata.duration_seconds, metadata.total_frames / metadata.fps)
-        candidate["end_seconds"] = round(min(video_end, max(original_end, end)), 6)
-        candidate["duration_seconds"] = round(candidate["end_seconds"] - candidate["start_seconds"], 6)
-        candidate["program_hint_tail"] = {
-            "normal_logo_return_seconds": returned,
-            "original_end_seconds": original_end,
-            "reason": "BRANDED_WEDO_BUMPER_TO_MOVIE_CUT" if bumper else "LOCAL_NORMAL_LOGO_RETURN",
-            "logo_measurement": "comskip-mask-rect-python-reference",
-        }
+        # Reuse v1's end selection and branded-bumper backtrack without changing
+        # the released implementation. Only the native observation scope differs.
+        local_report = {"activation": {"matched": True},
+                        "duration_seconds": min(metadata.duration_seconds, metadata.total_frames / metadata.fps),
+                        "candidates": [candidate]}
+        refined = extend_wedo_movies_program_hint_tails(
+            local_report, sidecar_path=sidecar, video_path=video,
+            fps=metadata.fps, logo_mask_path=mask_path,
+        )["candidates"][0]
+        if refined["program_hint_tail"]["normal_logo_return_seconds"] is None:
+            raise RuntimeError("Keine sichere native Logo-Rückkehr im lokalen WeDo-Nachlauf")
+        refined["program_hint_tail"].update(measurement)
+        candidate.update(refined)
 
 
 def outer_intervals(observations: list[dict], metadata, candidates: list[dict]) -> list[tuple[int, int]]:
@@ -231,7 +199,8 @@ def run_wedo_sparse_mode(args, key: str, video: Path) -> dict:
         if not report["candidates"]:
             raise RuntimeError("Keine bestätigten roten WeDo-Blöcke im lokalen Scan")
         stage = time.perf_counter()
-        refine_tails(report, video, metadata, film_root / "selected.logo.txt", score_at_times)
+        refine_tails(report, video, metadata, film_root / "selected.logo.txt",
+                     ffmpeg=args.ffmpeg, comskip=args.comskip, ini=args.ini, film_root=film_root)
         timings["local_tail_refinement"] = time.perf_counter() - stage
         print("[Phase 5/5] WeDo-Test: bestätigte Blöcke ausgeben", flush=True)
         final_root = film_root / "final"
@@ -256,7 +225,7 @@ def run_wedo_sparse_mode(args, key: str, video: Path) -> dict:
         }
         (film_root / "diagnostic.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         (final_root / "final.log").write_text(
-            "WEDO TEST: sparse-local-v1\n"
+            f"WEDO TEST: {PROCESSING_MODE}\n"
             f"Stichproben: {len(observations)}; lokale Fenster: {len(windows)}; Abdeckung: {coverage:.1%}\n"
             f"Bestaetigte rote Bloecke: {len(report['candidates'])}\n"
             "Dateiraender: grobe Logo-Marker, manuell pruefen.\n"
