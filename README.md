@@ -1,291 +1,70 @@
-# Comskip – Enhanced Logo Detection Fork
+# Comskip – Improved GUI & Enhanced Logo Detection
 
-> V4 development branch: commercial recordings listed in
-> `Makromodus-Sender.txt` use the new dynamic-logo macro path. The complete
-> legacy workflow remains available through `--full-analysis`. See
-> `docs/V4_MAKROMODUS_PLAN.md` for the isolated V4 plan.
+**A Comskip fork for faster commercial detection and a much better editing experience.**
 
-This repository is a custom Comskip fork focused on improving commercial detection in **raw, untrimmed TV recordings**.
+Comskip identifies commercial breaks in TV recordings. This fork builds on that foundation with two major improvements: a substantially improved **ComskipGUI** for reviewing and correcting cut points, and **enhanced logo detection with fast, broadcaster-specific processing paths**.
 
-The central issue addressed by this fork is not that Comskip's local logo matcher is inherently poor. In testing, the existing edge-based matcher was often very accurate once it had learned the correct station logo.
+If you already use Comskip, this fork makes working with its results easier and more precise. If you are looking for commercial-detection software for television recordings, it provides automatic detection and hands-on review in one workflow—particularly for raw recordings from online TV recorders such as **YouTV**, including recordings with extra material before and after the programme.
 
-The weak point was **logo initialization**.
+**New here?** Read the [Quick start](#quick-start) or the [English user guide and keyboard reference](docs/USER_GUIDE.md).
 
-Raw TV recordings often begin or end with material that does not belong to the intended program: the end of the previous show, news, trailers, commercials, a different aspect ratio, the same station logo at a different screen position, no station logo at all, or the beginning of the following program.
+## 1. A substantially better ComskipGUI
 
-If logo learning is based too heavily on this material, Comskip can initialize the wrong logo model and later make poor commercial decisions even though its local matcher itself is capable of good results.
+Automatic detection is only part of the job. Checking a recording and correcting its cut points should be quick, clear and reliable. Improving that everyday experience is the first major focus of this fork.
 
-This fork changes that architecture.
+- **A clearer timeline:** more visible commercial blocks, boundaries and navigation markers make it easier to see what will be kept and what will be removed.
+- **More practical navigation:** click or drag along the timeline, move through individual frames, use short or longer time jumps, and jump directly between commercial boundaries.
+- **More comfortable viewing:** improved use of the maximized window and smoother redraws make navigating a recording less distracting.
+- **Precise, stable cut points:** adjust block starts and ends at the selected frame. Corrected frame mapping keeps saved boundaries from shifting when results are reopened.
+- **Easier corrections:** insert a block at the current position, adjust or delete blocks, and undo recent edits with **Ctrl+Z**.
+- **Protection against accidental loss of edits:** a save confirmation appears when leaving a review with unsaved changes.
 
-## Comskip V3: fast boundary mode for ad-free public broadcasters
+The benefit is direct: less time wrestling with the interface and more control over the final cut. The improved GUI is a reason to use this fork even if your main interest is Comskip's existing detection workflow.
 
-V3 adds a separate, deliberately short path for configured public broadcasters.
-It does not search for commercial blocks inside the programme. It starts from a
-middle anchor, learns any useful overlay dynamically for the current recording
-(without a stored logo position), scans only reduced reference regions at both
-edges and writes exactly two editable blocks:
+## 2. Enhanced logo detection, with faster analysis paths
 
-```text
-frame 1 -> estimated programme start
-estimated programme end -> last frame
-```
+This fork extends Comskip's logo detection to better handle untrimmed TV recordings and to reduce analysis time where a focused detection path is sufficient.
 
-The configured stations live in `Schnellmodus-Sender.txt` beside
-`comskip-final.exe`. The file also contains the editing instructions: use M/N to
-jump between boundaries, E to correct the end of the first block and B to
-correct the beginning of the last block. The console, log, diagnostic JSON,
-sidecar marker and ComskipGUI window title identify this mode as
-`SCHNELLMODUS`. If the station file is absent, the automatic fast mode is
-disabled; `--full-analysis` bypasses it for one recording.
+Depending on the selected profile, it can learn a station logo dynamically from the recording, compare candidates from several learning windows, and combine Comskip's edge-based logo detector with an independent logo sensor. Learning from the programme itself reduces the influence of unrelated material at the recording's beginning and end.
 
-## Main changes
+The fast paths use coarse sampling to locate relevant sections, then examine transition regions in more detail. This can make analysis substantially faster than processing the entire recording with the full Comskip pipeline. The actual gain depends on the broadcaster, recording and selected profile.
 
-### 1. Six-minute learning exclusion at both ends
+## 3. Different broadcasters, different detection stages
 
-The **first six minutes** and **last six minutes** of a recording are excluded from station-logo learning.
+TV recordings do not all need the same analysis. This fork adds broadcaster-specific profiles with their own detection stages:
 
-They are **not excluded from commercial detection**.
+| Processing profile | What it does for you |
+| --- | --- |
+| **Fast boundary mode** | For configured broadcasters carrying programmes without internal commercial breaks, identifies approximate programme-start and programme-end boundaries for quick manual adjustment. |
+| **Commercial logo macro mode** | Learns the logo from the current recording, finds broad programme and commercial sections, and refines the transitions locally. |
+| **WeDo Movies detection** | Uses a dedicated recognition path for WeDo promotional layouts and the return to the movie, combining a coarse search with local verification. |
+| **Full analysis** | Combines enhanced logo analysis with Comskip's existing detection signals and block-processing logic for recordings that need the general processing path. |
 
-After logo initialization is complete, the **entire recording from the first frame to the last frame** is analyzed.
+The launcher selects the appropriate primary profile from configured broadcaster tokens in the filename. Each profile runs its own processing stages; recordings do not simply pass through every detector. The commercial macro and WeDo fast paths include automatic fallback to their fuller analysis paths when needed.
 
-```text
-Recording
-|------|--------------------------------------------|------|
-0:00   6:00                                      -6:00   END
+**These extensions are already implemented.** Broadcaster lists can be edited in `Schnellmodus-Sender.txt` and `Makromodus-Sender.txt`; the WeDo path recognizes the filename token `wedo-movies`. More advanced behaviour is configured through command-line options and code. With some technical know-how, you can adapt the detection to your recordings. There is currently no unified graphical editor for these settings.
 
-       <--------- logo learning allowed --------->
+## Quick start
 
-<------------- complete recording analyzed ------------->
-```
+1. Open `_Workflow/Werbung entfernen Start.bat` in the complete portable Windows package.
+2. Press **V** to choose your MP4 recording folder, then **A** to analyse and review.
+3. In ComskipGUI, use **N/M** to jump between boundaries and **Left/Right** for frame-by-frame adjustment.
+4. Use **B/E** to set a block's beginning/end, **I/D** to insert/delete a block, and **Ctrl+Z** to undo.
+5. Press **W** to save and **Esc** to close. Choose **C** in the console to prepare an Avidemux project with the confirmed cuts, or **M** for manual editing.
+6. Open the generated Avidemux launcher beside the recording, check the programme edges, and save the edited video.
 
-This rule is intentional and optimized for raw TV recordings with lead-in and lead-out material.
+**[Read the English user guide](docs/USER_GUIDE.md)** for setup, the full keyboard reference, editing instructions and broadcaster settings. It also explains the workflow's current German menu labels in English. Saving in ComskipGUI saves the cut list; the video is cut in the subsequent editing step.
 
-### 2. Multi-window Comskip logo learning
+## Working with your recordings
 
-Comskip's existing fast edge-mask logo detector is retained.
+The intended workflow is straightforward: **analyse a recording, review the detected blocks in the improved GUI, correct any boundaries, and use the saved cut list for the final video cut.**
 
-Instead of treating one early learning period as authoritative, this fork learns logo candidates from **five separate windows** distributed across the valid middle section of the recording.
+Automatic detection can still need correction, particularly around trailers, station promotions or changing logos. The improved review interface makes that final check a practical part of the workflow.
 
-The candidates are compared and the **recurring logo mask** is selected. The masks are not blindly merged.
+The portable Windows package includes the Comskip engine, ComskipGUI, the enhanced analysis launcher and the supporting workflow. Start the included workflow with `_Workflow/Werbung entfernen Start.bat`. The workflow requires Python 3 and the video-processing tools described in the package documentation.
 
-The goal is simple: learn the station logo that repeatedly appears across the actual recording, rather than trusting whatever happens to be visible near the beginning.
+Source-build requirements and instructions are in [BUILDING.md](BUILDING.md).
 
-### 3. Local logo evidence is retained
+## Upstream and license
 
-A poor global logo percentage no longer automatically means that all useful local logo information should be discarded.
-
-Global logo statistics can still be treated as reliability information, but a valid local logo signal remains available to the commercial detector.
-
-### 4. Independent second logo sensor
-
-This fork contains an additional, independent logo sensor using a different recognition strategy from Comskip's traditional edge-mask detector.
-
-The additional sensor uses concepts including distributed sampling, stable corner-region detection, edge-frequency / heatmap analysis, reference construction from multiple samples, local similarity / correlation, temporal stabilization and PTS-based alignment.
-
-The purpose of the second sensor is not to replace Comskip's edge matcher, but to provide an independent signal with different failure modes.
-
-## Relationship to AdFinder
-
-The additional logo-detection work was informed by a separate private project called **AdFinder**.
-
-AdFinder has a different purpose: it scans already edited video files to detect commercial breaks that may accidentally have remained after cutting.
-
-**AdFinder itself is not included in this repository, was not modified as part of this work, and is not a runtime dependency of this Comskip fork.**
-
-The functionality required by this fork has its own implementation inside the Comskip project. You do not need AdFinder in order to use this fork.
-
-### 5. Both logo sensors use the same safe learning region
-
-Both logo systems follow the same initialization rule:
-
-```text
-first 6 minutes      -> do not learn
-middle of recording  -> learn
-last 6 minutes       -> do not learn
-```
-
-After initialization, both can analyze the complete recording, including the beginning and end.
-
-### 6. Existing Comskip detection remains important
-
-This is **not** a logo-only commercial detector.
-
-After the improved logo stage, Comskip's existing detection and block-processing logic continues to run, including the mechanisms enabled by the current configuration such as black frames, aspect-ratio changes, resolution changes and existing commercial/block heuristics.
-
-Practical testing showed that this second stage matters. The logo-only intermediate result was not always sufficient, while the final Comskip result was substantially better.
-
-```text
-better logo initialization
-        +
-Comskip edge-based logo detector
-        +
-independent second logo sensor
-        +
-retained local logo evidence
-        +
-existing Comskip detectors and block logic
-        =
-final commercial detection
-```
-
-### 7. Optional WeDo Movies module
-
-The portable workflow contains an additional station-specific pass for recordings whose filename contains the exact, case-sensitive token `wedo-movies`.
-
-Only those files use the WeDo Movies module. Every other recording bypasses it and continues through the normal Comskip pipeline unchanged.
-
-For matching recordings, the module detects the stable red WeDo promotional layout, follows the adjoining logo-free trailer material for at most 180 seconds, and ends the commercial block when the normal movie logo is found again. If that logo is recognized late, a conservative lookback of at most 25 seconds may restore the earlier movie start. The correction is accepted only with corroborating WeDo bumper and scene-transition evidence; differences below five seconds are intentionally left unchanged.
-
-The portable workflow also supports selective reanalysis of one previously processed film. Its former analysis and CROP/MANUELL decision are backed up before the new run.
-
-## Why this can make a large difference
-
-A raw recording may start several minutes before the intended movie. The preceding material can use a different aspect ratio and place the same broadcaster logo at a different vertical position.
-
-A detector that learns immediately from the beginning can therefore build a perfectly valid model for the **wrong program geometry**.
-
-The local matcher may not be defective at all. The initialization was wrong.
-
-This fork changes the question from:
-
-> What logo do I see near the beginning?
-
-into:
-
-> What station-logo structure repeatedly appears across several independent parts of the recording?
-
-## Practical validation
-
-Development was tested against several real raw TV recordings with different broadcasters, logo positions, aspect ratios and failure modes.
-
-The final implementation was manually inspected in ComskipGUI on:
-
-- American Assassin
-- Freelance
-- One Day as a Lion
-- Der König der Löwen 2 – Simbas Königreich
-- The Hateful Eight
-
-The final-stage output of the completed implementation was manually judged correct on this reference set.
-
-American Assassin was additionally rerun after finalization and reproduced the previously approved final commercial output exactly.
-
-This is practical validation of the intended use case, **not a claim of universal 100% accuracy**.
-
-## Intended use
-
-This fork is primarily intended for **raw / untrimmed television recordings**, especially recordings containing several minutes of material before or after the intended movie or program.
-
-It is particularly useful when the broadcaster keeps a stable station logo during the program and removes it during commercial breaks.
-
-## Assumptions and limitations
-
-The six-minute exclusion is a deliberate domain assumption.
-
-It may be unnecessary or less suitable for:
-
-- very short recordings
-- already precisely trimmed recordings
-- programs with very little usable middle section
-- broadcasters that frequently remove or animate the station logo
-- broadcasts where the logo repeatedly changes position
-- recordings where no stable station logo exists
-
-The current implementation should therefore be understood as an optimization for unattended TV recordings with safety margins before and after the intended program.
-
-## Stable reference version
-
-```text
-branch: custom
-tag:    custom-2026-08-31-v4-stable
-```
-
-To restore this exact source revision:
-
-```bash
-git clone <repository-url>
-cd <repository-directory>
-git checkout custom-2026-08-31-v4-stable
-```
-
-The stable tag is the preferred reference.
-
-## Windows executables
-
-The finalized portable build contains:
-
-```text
-comskip.exe
-ComskipGUI.exe
-comskip-final.exe
-```
-
-`comskip-final.exe` contains the runtime required by the internal second logo sensor. It does **not** require the external AdFinder project.
-
-### SHA-256 – finalized build
-
-```text
-comskip.exe
-5E6634AA97F3F5C4BF01614114F32C1B7406E3F188C273FB4B3E70A36B2F5319
-
-ComskipGUI.exe
-A92D4D6114789D61A220A6D7137822A89D4B92C4274C5257921B78DCFF0253A6
-
-comskip-final.exe
-F653870281A5CBE2ABC06728114426D2E6AB121AB4AC380F8D9686C8A59B8267
-```
-
-## GUI navigation change
-
-```text
-Down Arrow  -> +1 second
-Up Arrow    -> -1 second
-Page Down   -> +20 seconds
-Page Up     -> -20 seconds
-```
-
-The key direction now follows the timeline consistently.
-
-## Reproducible build
-
-The source code for the final implementation is contained in this Comskip repository and does not depend on the external AdFinder repository at runtime.
-
-Fresh-clone requirements, pinned Python dependencies and the complete Windows
-build/package command are documented in [`BUILDING.md`](BUILDING.md). On
-Windows, `.\tools\build_windows.ps1` builds the native programs, runs the
-Python tests, creates `comskip-final.exe` and assembles the portable runtime
-under `dist\ComSkip`.
-
-## Development history
-
-The final result was not produced by changing one threshold.
-
-Several hypotheses were tested separately, including commercial-length scoring, preservation of local logo information, independent logo detection, logo-signal fusion and alternative logo initialization strategies.
-
-The largest practical improvement appeared after changing **how the station logo is initialized** and then allowing Comskip's existing detectors to continue refining the result.
-
-```text
-exclude unreliable recording edges from learning
-+
-learn from multiple independent windows
-+
-retain local logo evidence
-+
-use an independent second detector
-+
-run the existing Comskip detection logic afterwards
-```
-
-## Relationship to upstream Comskip
-
-This is a custom Comskip fork.
-
-The changes address a specific weakness observed with raw TV recordings where the beginning and end of the file may not represent the intended program.
-
-It should not be interpreted as a claim that every recording, broadcaster or workflow will always perform better than upstream Comskip. Users should compare the results against upstream Comskip on their own source material.
-
-## License and redistribution
-
-This fork remains subject to the applicable license terms of the original Comskip project and any third-party components distributed with the resulting binaries.
-
-Before distributing prebuilt binaries, verify the redistribution requirements for all bundled dependencies used by the final package.
+This project is a fork of [Comskip](https://github.com/erikkaashoek/Comskip), extending its commercial-detection engine and review interface. See [LICENSE](LICENSE) for the project license; bundled third-party components retain their respective licenses.
