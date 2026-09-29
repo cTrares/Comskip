@@ -34,7 +34,32 @@ comskip.c.save-failed
 # Python caches and local test/build workspaces
 __pycache__/
 *.py[cod]
+*.pyd
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
 /_temp/
+
+# Logs, temporary files and editor/OS leftovers
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+*~
+.DS_Store
+Thumbs.db
+
+# Native build by-products
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.d
+*.gcda
+*.gcno
+.libs/
 
 # Local build environments and packaged binary outputs
 /.codex-build-env/
