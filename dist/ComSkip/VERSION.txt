@@ -1,7 +1,10 @@
-ComSkip V4.1 FINAL
-Stand: 2026-09-07
-Git-Tag: v4.1-final-2026-09-07
-Freigegebene Basis: WeDo-v3-Test mit lokaler nativer Werbeendprüfung
-Abdeckungsgrenze: 60 Prozent
-Keine Änderungen an Erkennungsparametern gegenüber dem akzeptierten Teststand.
+ComSkip V4.3 MULTI-STSD
+Stand: 2026-10-02
+Basis: ComSkip V4.1 FINAL / WeDo-v3 mit lokaler nativer Werbeendprüfung
+Neu: Multi-STSD-MP4s werden an den Keep-Positionen ueber elst/ctts -> stsc -> stsd -> avcC -> H.264-SPS/VUI ausgewertet
+Single-STSD-Dateien behalten die bewaehrte Keep-Segment-basierte FFmpeg-showinfo-Erkennung
+720/704x576 stabil 16:9 oder 4:3: Avidemux Custom-DAR wird automatisch gesetzt
+Gemischte oder unklare PAL-SD-Fälle: keine automatische Ratio-Erzwingung
+Finalschnitt: erwartetes DAR wird zusätzlich mit ffprobe validiert
+Keine Änderungen an der Werbeerkennung gegenüber V4.1 FINAL.
 Start: _Workflow\Werbung entfernen Start.bat

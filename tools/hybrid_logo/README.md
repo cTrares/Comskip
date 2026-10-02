@@ -25,16 +25,18 @@ Recordings whose filename contains the exact, case-sensitive token
 can activate this module. The console explicitly reports the selected station
 profile.
 
-The detector scans a low-resolution one-frame-per-second stream for the stable
-red promo layout used during WeDo Movies breaks. A candidate must persist as an
-approximately two-minute sequence with only the short, expected ident gaps;
-isolated red film scenes are rejected. In active mode these high-confidence
-intervals are merged with, rather than substituted for, the normal Comskip
-result. `--wedo-movies-mode shadow` records the evidence without changing the
-cut list, and `--wedo-movies-mode off` disables the module.
+The V4.1 detector first uses a coarse 20-second grid and local verification of
+the stable red promo layout used during WeDo Movies breaks. If local search
+coverage is below 60 percent, it automatically falls back to the full previous
+analysis. Isolated red film scenes are rejected. In active mode the confirmed
+WeDo intervals are authoritative for internal commercial blocks; unrelated
+internal Comskip blocks are not merged into them. `--wedo-movies-mode shadow`
+records the evidence without changing the cut list, and
+`--wedo-movies-mode off` disables the module.
 
-After each confirmed red block, the WeDo-specific tail extension examines at
-most the following 180 seconds. It reuses Comskip's selected recurring normal
+After each confirmed red block, the native WeDo-specific tail verification uses
+30 seconds of lead-in, examines at most the following 180 seconds, and retains
+30 seconds of follow-up context. It reuses Comskip's selected recurring normal
 station-logo mask and extends the commercial interval until the first local
 `PRESENT` observation. No additional multi-second hold is required after that
 first return, so a cloud or other difficult background immediately afterwards

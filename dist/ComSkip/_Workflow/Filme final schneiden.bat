@@ -115,6 +115,8 @@ set "FALLBACK_FINAL=%WORK_DIR%\%BASE%.avidemux-fallback-final.%RUN_ID%.mp4"
 set "REMUX_LOG=%LOG_DIR%\%BASE%.remux-fallback.log"
 set "FALLBACK_AVID_LOG=%LOG_DIR%\%BASE%.avidemux-fallback.log"
 set "FINAL_WAS_INVALID=0"
+set "EXPECTED_DAR="
+for /f "tokens=2 delims==" %%D in ('findstr.exe /b /c:"# ComskipExpectedDAR=" "%PROJECT%" 2^>nul') do if not defined EXPECTED_DAR set "EXPECTED_DAR=%%D"
 
 >"%LOG%" echo Filme final schneiden
 >>"%LOG%" echo Projekt: "%PROJECT%"
@@ -122,6 +124,8 @@ set "FINAL_WAS_INVALID=0"
 >>"%LOG%" echo Ziel: "%FINAL_FILE%"
 >>"%LOG%" echo Avidemux: "%AVIDEMUX%"
 >>"%LOG%" echo ffprobe: "%FFPROBE%"
+if defined EXPECTED_DAR >>"%LOG%" echo Erwartetes DAR: %EXPECTED_DAR%
+if not defined EXPECTED_DAR >>"%LOG%" echo Erwartetes DAR: nicht festgelegt
 if defined FFMPEG >>"%LOG%" echo ffmpeg: "%FFMPEG%"
 if not defined FFMPEG >>"%LOG%" echo ffmpeg: NICHT GEFUNDEN - normaler Ablauf bleibt verfuegbar.
 
@@ -134,7 +138,7 @@ if not exist "%ORIGINAL%" (
 
 if exist "%FINAL_FILE%" (
     >>"%LOG%" echo Vorhandene Finaldatei wird validiert.
-    call :ValidateVideo "%FINAL_FILE%" "%LOG%"
+    call :ValidateVideo "%FINAL_FILE%" "%LOG%" "%EXPECTED_DAR%"
     if not errorlevel 1 (
         >>"%LOG%" echo BEREITS FERTIG: Vorhandene Finaldatei ist gueltig.
         echo [%INDEX%/%FOUND%] "%BASE%.mp4" ... BEREITS FERTIG
@@ -177,7 +181,7 @@ if "%TEMP_SIZE%"=="0" (
 )
 
 >>"%LOG%" echo Temporaere Datei wird mit ffprobe validiert.
-call :ValidateVideo "%TEMP_FILE%" "%LOG%"
+call :ValidateVideo "%TEMP_FILE%" "%LOG%" "%EXPECTED_DAR%"
 if errorlevel 1 (
     >>"%LOG%" echo FEHLER: Die temporaere Datei ist kein brauchbares Video.
     del /q "%TEMP_FILE%" >>"%LOG%" 2>&1
@@ -211,7 +215,7 @@ if "%SAVE_STARTED%"=="0" >>"%LOG%" echo save--^> erkannt: NEIN
 
 if exist "%TEMP_FILE%" (
     >>"%LOG%" echo Trotz Fehler vorhandene temporaere Ausgabe wird geprueft.
-    call :ValidateVideo "%TEMP_FILE%" "%LOG%"
+    call :ValidateVideo "%TEMP_FILE%" "%LOG%" "%EXPECTED_DAR%"
     if not errorlevel 1 set "NORMAL_TEMP_VALID=1"
 )
 
@@ -349,7 +353,7 @@ if "%FALLBACK_FINAL_SIZE%"=="0" (
 )
 
 >>"%FALLBACK_AVID_LOG%" echo Temporaere Fallback-Finaldatei wird mit ffprobe validiert.
-call :ValidateVideo "%FALLBACK_FINAL%" "%FALLBACK_AVID_LOG%"
+call :ValidateVideo "%FALLBACK_FINAL%" "%FALLBACK_AVID_LOG%" "%EXPECTED_DAR%"
 if errorlevel 1 (
     >>"%FALLBACK_AVID_LOG%" echo Fallback-Finalvalidierung: FEHLER
     >>"%FALLBACK_AVID_LOG%" echo FEHLER: Temporaere Fallback-Finaldatei ist nicht valide.
@@ -380,7 +384,7 @@ exit /b 0
 
 :ValidateVideo
 if exist "%PROBE_DATA%" del /q "%PROBE_DATA%" >>"%~2" 2>&1
-"%FFPROBE%" -v error -select_streams v:0 -show_entries stream=index -show_entries format=duration -of default=noprint_wrappers=1 "%~1" >"%PROBE_DATA%" 2>>"%~2"
+"%FFPROBE%" -v error -select_streams v:0 -show_entries stream=index,width,height,sample_aspect_ratio,display_aspect_ratio -show_entries format=duration -of default=noprint_wrappers=1 "%~1" >"%PROBE_DATA%" 2>>"%~2"
 set "PROBE_EXIT=%ERRORLEVEL%"
 if exist "%PROBE_DATA%" type "%PROBE_DATA%" >>"%~2" 2>&1
 if not "%PROBE_EXIT%"=="0" (
@@ -388,9 +392,11 @@ if not "%PROBE_EXIT%"=="0" (
     exit /b 1
 )
 set "CROP_PROBE_DATA=%PROBE_DATA%"
-powershell.exe -NoProfile -NonInteractive -Command "$hasVideo=$false; $duration=0.0; foreach($line in Get-Content -LiteralPath $env:CROP_PROBE_DATA){if($line -match '^index=\d+$'){$hasVideo=$true}; if($line -match '^duration=(.+)$'){$null=[double]::TryParse($Matches[1],[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$duration)}}; if($hasVideo -and $duration -gt 0){exit 0}; exit 1" >>"%~2" 2>&1
+set "CROP_EXPECTED_DAR=%~3"
+powershell.exe -NoProfile -NonInteractive -Command "$hasVideo=$false; $duration=0.0; $dar=''; foreach($line in Get-Content -LiteralPath $env:CROP_PROBE_DATA){if($line -match '^index=\d+$'){$hasVideo=$true}; if($line -match '^display_aspect_ratio=(.+)$'){$dar=$Matches[1].Trim()}; if($line -match '^duration=(.+)$'){$null=[double]::TryParse($Matches[1],[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$duration)}}; $expected=$env:CROP_EXPECTED_DAR; if($hasVideo -and $duration -gt 0 -and ([string]::IsNullOrWhiteSpace($expected) -or $dar -eq $expected)){exit 0}; if(-not [string]::IsNullOrWhiteSpace($expected)){Write-Error ('DAR-Pruefung fehlgeschlagen. Erwartet: '+$expected+', gefunden: '+$dar)}; exit 1" >>"%~2" 2>&1
 set "PROBE_VALID=%ERRORLEVEL%"
 set "CROP_PROBE_DATA="
+set "CROP_EXPECTED_DAR="
 if exist "%PROBE_DATA%" del /q "%PROBE_DATA%" >>"%~2" 2>&1
 if not "%PROBE_VALID%"=="0" exit /b 1
 exit /b 0

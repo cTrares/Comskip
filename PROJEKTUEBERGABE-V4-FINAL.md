@@ -1,6 +1,6 @@
-# Projektübergabe: Comskip V4 Final
+# Projektübergabe: Comskip V4.1 Final
 
-Stand: 31. August 2026
+Stand: 7. September 2026
 
 Diese Datei ist der verbindliche Wiedereinstieg für spätere Fehleranalysen und Korrekturen. Sie ersetzt nicht den Quellcode oder Git, sondern destilliert die fachlichen Entscheidungen aus dem langen Entwicklungsverlauf.
 
@@ -9,13 +9,15 @@ Diese Datei ist der verbindliche Wiedereinstieg für spätere Fehleranalysen und
 - Git-Repository: `D:\PythonProjekte\ComSkip Fork`
 - Stabiler Branch: `custom`
 - Ausgangs-Commit der V4-Entwicklung: `8a3e63a`
-- Stabiler Tag: `custom-2026-08-31-v4-stable`
+- Historischer V4-Basis-Tag: `custom-2026-08-31-v4-stable`
 - GitHub-Fork: `https://github.com/cTrares/Comskip`
 - Portable Endfassung: `D:\PythonProjekte\ComSkip Fork\dist\ComSkip`
 
-Der V4-Entwicklungsbranch wurde per Fast-Forward in `custom` übernommen. Die
-portable Endfassung wurde aus diesem Stand gebaut. `comskip-final.exe` im
-portablen Ordner entsprach beim Abschluss exakt dem letzten PyInstaller-Build.
+Der V4-Entwicklungsbranch wurde per Fast-Forward in `custom` übernommen. Darauf
+aufbauend wurde am 7. September 2026 der akzeptierte WeDo-v3-Stand als V4.1 in
+die normale `comskip-final.exe` übernommen. Der separate WeDo-Teststarter wird
+nicht mehr benötigt. Die portable Endfassung liegt unter `dist\ComSkip`; ihr
+genauer Stand ist zusätzlich in `VERSION.txt` und `SHA256SUMS.txt` festgehalten.
 
 ## 2. Unverrückbare Arbeitsgrenzen
 
@@ -51,6 +53,11 @@ Die Profilwahl ist exklusiv. Ein Film darf genau einem primären Profil zugeordn
 - Nur disjunkte äußere Crop-Blöcke direkt an den physischen Dateirändern dürfen erhalten bleiben.
 - Allgemeine Werbekanten-Nachprüfung ist bei WeDo ausgeschaltet.
 - Der intern sichtbare „Comskip-Sensor“ ist ein Messdienst für Logo-Rückkehrpunkte, kein zweiter Entscheidungsweg. Die bisherige Terminalbezeichnung „vollständige Merkmalsanalyse“ ist irreführend, aber die interne WeDo-Ausgabe bleibt autoritativ.
+- V4.1 verwendet zunächst eine grobe Suche im 20-Sekunden-Raster und lokale
+  Bestätigung. Unterhalb von 60 Prozent lokaler Suchabdeckung erfolgt automatisch
+  der vollständige bisherige Analyseweg.
+- Die native Endprüfung verwendet weiterhin 30 Sekunden Vorlauf, höchstens
+  180 Sekunden Suche und 30 Sekunden Nachlauf.
 
 Validierung mit drei WeDo-Filmen gegen manuelle Schnitte:
 
@@ -189,6 +196,4 @@ Im neuen Chat zuerst diese Datei vollständig lesen lassen. Anschließend den ne
 
 Empfohlener Starttext:
 
-> Lies zuerst `D:\PythonProjekte\ComSkip Fork\PROJEKTUEBERGABE-V4-FINAL.md` vollständig. Arbeite ausschließlich unter `D:\PythonProjekte\ComSkip Fork`. Der Ausgangsstand ist Git-Tag `custom-2026-08-31-v4-stable`. Analysiere anschließend die von mir genannten neuen Problemfälle gegen meine manuellen Referenzen.
-
-Für eine neue Korrektur vorzugsweise einen neuen Fix-Branch vom Final-Tag anlegen. Den Final-Tag selbst nicht verschieben und die bisherige V4-Fassung nicht überschreiben, bevor der neue Stand validiert ist.
+> Lies zuerst `D:\PythonProjekte\ComSkip Fork\PROJEKTUEBERGABE-V4-FINAL.md` vollständig. Arbeite ausschließlich unter `D:\PythonProjekte\ComSkip Fork`. Maßgeblich ist der portable V4.1-Stand vom 7. September 2026. Analysiere anschließend die von mir genannten neuen Problemfälle gegen meine manuellen Referenzen.

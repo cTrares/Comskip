@@ -158,7 +158,7 @@
       <h2>Normaler Verarbeitungsweg</h2>
       <p>Der normale Avidemux-Weg ist immer der erste Versuch:</p>
       <ol>
-        <li>Eine vorhandene Finaldatei wird mit <code>ffprobe</code> geprüft. Ist sie gültig, erhält der Film den Status <strong>BEREITS FERTIG</strong> und Avidemux wird nicht gestartet.</li>
+        <li>Eine vorhandene Finaldatei wird mit <code>ffprobe</code> geprüft. Enthält das CROP-Projekt ein erwartetes DAR, muss auch dieses übereinstimmen. Erst dann erhält der Film den Status <strong>BEREITS FERTIG</strong> und Avidemux wird nicht gestartet.</li>
         <li>Andernfalls führt <code>avidemux_cli.exe</code> das vorhandene CROP-Projekt ohne GUI aus:</li>
       </ol>
       <pre>avidemux_cli.exe
@@ -167,7 +167,7 @@
 --quit</pre>
       <ol start="3">
         <li>Avidemux schreibt ausschließlich in eine eindeutige temporäre MP4 unter <code>Downloads\Final\_work</code>, niemals direkt in die endgültige Finaldatei.</li>
-        <li>Akzeptiert werden nur Exit-Code 0, eine vorhandene Datei mit mehr als 0 Byte sowie eine erfolgreiche <code>ffprobe</code>-Prüfung mit Videostream und positiver Laufzeit.</li>
+        <li>Akzeptiert werden nur Exit-Code 0, eine vorhandene Datei mit mehr als 0 Byte sowie eine erfolgreiche <code>ffprobe</code>-Prüfung mit Videostream, positiver Laufzeit und gegebenenfalls dem vom Generator erwarteten DAR.</li>
         <li>Erst danach wird die Datei sicher nach <code>Downloads\Final\&lt;Originaldateiname&gt;.mp4</code> übernommen.</li>
       </ol>
       <p>Alle Filme werden seriell verarbeitet. Ein Fehler bei einem Film stoppt den restlichen Sammellauf nicht.</p>
@@ -227,8 +227,8 @@
 
     <section>
       <h2>Validierung und sichere Übernahme</h2>
-      <p>Die MKV-Zwischenquelle und die temporäre Fallback-Final-MP4 werden jeweils mit derselben Sicherheitslogik geprüft: Datei lesbar, Videostream vorhanden und Laufzeit positiv; die Final-MP4 muss außerdem vorhanden und größer als 0 Byte sein. Nur eine vollständig validierte MP4 wird nach <code>Downloads\Final</code> übernommen.</p>
-      <p>Eine gültige bereits vorhandene Finaldatei wird übersprungen. Ist eine vorhandene Finaldatei ungültig, bleibt sie erhalten, bis eine neue Version erfolgreich erzeugt und validiert wurde.</p>
+      <p>Die MKV-Zwischenquelle wird auf Lesbarkeit, Videostream und positive Laufzeit geprüft. Für die temporäre normale oder Fallback-Final-MP4 kommt bei PAL-SD zusätzlich das im CROP-Projekt gespeicherte erwartete DAR hinzu. Nur eine vollständig validierte MP4 wird nach <code>Downloads\Final</code> übernommen.</p>
+      <p>Eine gültige bereits vorhandene Finaldatei wird übersprungen. Widerspricht ihr DAR der Projekterwartung, gilt sie als ungültig und wird neu erzeugt. Die vorhandene Datei bleibt erhalten, bis eine neue Version erfolgreich erzeugt und validiert wurde.</p>
     </section>
 
     <section>

@@ -1,11 +1,12 @@
-COMSKIP V4 - KOMMERZIELLER LOGO-MAKROMODUS
-==========================================
+COMSKIP V4.1 FINAL - VERARBEITUNGSPROFILE
+=========================================
 
-V4 ist ein getrennter Entwicklungsfork auf Basis der gesicherten V3-Version.
+V4.1 ist der aktuelle portable Stand. Er enthält den kommerziellen
+Logo-Makromodus sowie den akzeptierten WeDo-v3-Workflow in comskip-final.exe.
 
 Automatische Auswahl:
 - Schnellmodus-Sender.txt   -> öffentlich-rechtlicher V3-Schnellmodus
-- wedo-movies im Dateinamen -> eigener bestehender WeDo-Workflow
+- wedo-movies im Dateinamen -> autoritativer WeDo-v3-Workflow
 - Makromodus-Sender.txt     -> neuer kommerzieller Logo-Makromodus
 - alle übrigen Dateien      -> bisherige vollständige Analyse
 
@@ -51,5 +52,8 @@ Teil des Werbeblocks. Erst die danach stabil fortlaufende Filmphase bestimmt die
 Endkante. Kurze Logo-Messaussetzer in echtem Film werden weiterhin toleriert.
 
 Wichtig:
-Der erste V4-Build dient dem gebündelten Vergleichslauf über den vorhandenen
-kommerziellen Filmsatz. V3 bleibt separat erhalten und wird nicht überschrieben.
+Bei WeDo arbeitet V4.1 zunächst mit grober Suche im 20-Sekunden-Raster und
+lokaler Bestätigung. Reicht die lokale Suchabdeckung nicht aus, startet
+automatisch die vollständige bisherige Analyse. Die WeDo-Intervalle bleiben
+für innere Werbeblöcke autoritativ. Der separate WeDo-Teststarter wird nicht
+mehr benötigt.

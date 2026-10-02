@@ -1,16 +1,20 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
 import os
 import queue
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 
 try:
@@ -18,7 +22,7 @@ try:
 except ImportError:
     winreg = None
 
-BUILD_ID = "2026-09-07-COMSKIP-V4.1-FINAL"
+BUILD_ID = "2026-10-02-COMSKIP-V4.3-MULTI-STSD-CTTS"
 APPROVED_SUFFIX = "_Avidemux.py"
 START_SUFFIX = "_Avidemux_Start.bat"
 CROP_SUFFIX = "_Avidemux_CROP.py"
@@ -60,6 +64,17 @@ DECISION_ARTIFACT_SUFFIXES = (
 
 REANALYSIS_BACKUP_DIRECTORY = "_Comskip_Reanalyse_Sicherungen"
 
+PAL_SD_WIDTHS = (704, 720)
+PAL_SD_HEIGHT = 576
+ASPECT_SAMPLE_SECONDS = 3.0
+ASPECT_SAMPLE_MARGIN_SECONDS = 2.0
+ASPECT_SAMPLE_FRACTIONS = (0.10, 0.26, 0.42, 0.58, 0.74, 0.90)
+MAX_ASPECT_SAMPLES = 12
+MIN_VALID_ASPECT_SAMPLES = 3
+
+SHOWINFO_SAR_RE = re.compile(r"\bsar:(\d+)/(\d+)\b")
+SHOWINFO_SIZE_RE = re.compile(r"\bs:(\d+)x(\d+)\b")
+
 
 class ReturnToMainMenu(Exception):
     """Internal control flow after a requested batch/analysis stop."""
@@ -70,6 +85,25 @@ class AnalysisProcessResult:
     returncode: int
     stop_after_current: bool = False
     aborted: bool = False
+
+
+@dataclass(frozen=True)
+class AspectDecision:
+    force: bool = False
+    aspect_ratio: int = 1
+    display_width: int = 1280
+    expected_dar: str = ""
+    description: str = "Nicht-PAL-SD; bisherige Containerkonfiguration bleibt aktiv."
+    warning: str = ""
+    samples: tuple = ()
+
+
+@dataclass(frozen=True)
+class Mp4AspectMap:
+    is_mp4: bool = False
+    stsd_count: int = 0
+    samples: tuple = ()
+    error: str = ""
 
 
 def configure_console():
@@ -314,6 +348,806 @@ def parse_comskip_txt(path):
             merged[-1][1] = max(merged[-1][1], b)
 
     return total_frames, rate100, [(a, b) for a, b in merged]
+
+
+def build_keep_segments(total_frames, ads):
+    keeps, cursor = [], 0
+    for a, b in ads:
+        commercial_start = max(0, a - 1)
+        commercial_end = b
+        if commercial_start > cursor:
+            keeps.append((cursor, commercial_start))
+        cursor = max(cursor, commercial_end)
+    if cursor < total_frames:
+        keeps.append((cursor, total_frames))
+    return keeps
+
+
+def find_media_executable(name):
+    portable = Path(__file__).resolve().parent.parent / name
+    if portable.is_file():
+        return portable
+
+    found = shutil.which(name)
+    if found:
+        return Path(found)
+
+    stem = Path(name).stem
+    found = shutil.which(stem)
+    return Path(found) if found else None
+
+
+def probe_video_geometry(video, ffprobe):
+    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    try:
+        completed = subprocess.run(
+            [
+                str(ffprobe),
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "json",
+                str(video),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+            creationflags=creationflags,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    if completed.returncode != 0:
+        return None
+
+    try:
+        payload = json.loads(completed.stdout)
+        stream = payload.get("streams", [])[0]
+        width = int(stream.get("width", 0))
+        height = int(stream.get("height", 0))
+    except (ValueError, TypeError, IndexError, AttributeError):
+        return None
+
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+def get_keep_sample_positions(keeps, rate100):
+    if rate100 <= 0:
+        return []
+
+    seconds_per_frame = 100.0 / rate100
+    safe_segments = []
+    for start_frame, end_frame in keeps:
+        start = start_frame * seconds_per_frame
+        end = end_frame * seconds_per_frame
+        first = start + ASPECT_SAMPLE_MARGIN_SECONDS
+        last = end - ASPECT_SAMPLE_MARGIN_SECONDS - ASPECT_SAMPLE_SECONDS
+        if last < first:
+            continue
+        safe_segments.append((start, end, first, last))
+
+    if not safe_segments:
+        return []
+
+    if len(safe_segments) > MAX_ASPECT_SAMPLES:
+        selected = sorted(
+            safe_segments,
+            key=lambda segment: segment[1] - segment[0],
+            reverse=True,
+        )[:MAX_ASPECT_SAMPLES]
+    else:
+        selected = safe_segments
+
+    positions = {
+        round((first + last) / 2.0, 3)
+        for _start, _end, first, last in selected
+    }
+
+    if len(positions) < MAX_ASPECT_SAMPLES:
+        total_duration = sum(end - start for start, end, _first, _last in safe_segments)
+        for fraction in ASPECT_SAMPLE_FRACTIONS:
+            remaining = total_duration * fraction
+            chosen = None
+            for start, end, first, last in safe_segments:
+                duration = end - start
+                if remaining <= duration:
+                    centre = start + remaining
+                    chosen = min(max(centre - ASPECT_SAMPLE_SECONDS / 2.0, first), last)
+                    break
+                remaining -= duration
+            if chosen is None:
+                chosen = safe_segments[-1][3]
+            positions.add(round(chosen, 3))
+            if len(positions) >= MAX_ASPECT_SAMPLES:
+                break
+
+    return sorted(positions)
+
+
+def _mp4_boxes(data, start=0, end=None):
+    end = len(data) if end is None else end
+    offset = start
+    while offset + 8 <= end:
+        size = struct.unpack_from(">I", data, offset)[0]
+        box_type = data[offset + 4:offset + 8]
+        header_size = 8
+        if size == 1:
+            if offset + 16 > end:
+                raise ValueError("Unvollstaendiger 64-Bit-MP4-Boxheader")
+            size = struct.unpack_from(">Q", data, offset + 8)[0]
+            header_size = 16
+        elif size == 0:
+            size = end - offset
+        if box_type == b"uuid":
+            header_size += 16
+        if size < header_size or offset + size > end:
+            raise ValueError(f"Ungueltige MP4-Box {box_type!r}")
+        yield box_type, offset, offset + header_size, offset + size
+        offset += size
+
+
+def _mp4_child(data, start, end, wanted):
+    for box_type, _box_start, payload_start, box_end in _mp4_boxes(data, start, end):
+        if box_type == wanted:
+            return payload_start, box_end
+    return None
+
+
+def _read_mp4_moov(video):
+    with video.open("rb") as stream:
+        stream.seek(0, os.SEEK_END)
+        file_size = stream.tell()
+        stream.seek(0)
+        offset = 0
+        found_ftyp = False
+        while offset + 8 <= file_size:
+            stream.seek(offset)
+            header = stream.read(16)
+            if len(header) < 8:
+                break
+            size = struct.unpack_from(">I", header, 0)[0]
+            box_type = header[4:8]
+            header_size = 8
+            if size == 1:
+                if len(header) < 16:
+                    raise ValueError("Unvollstaendiger 64-Bit-MP4-Boxheader")
+                size = struct.unpack_from(">Q", header, 8)[0]
+                header_size = 16
+            elif size == 0:
+                size = file_size - offset
+            if box_type == b"uuid":
+                header_size += 16
+            if size < header_size or offset + size > file_size:
+                raise ValueError(f"Ungueltige Top-Level-MP4-Box {box_type!r}")
+            if box_type == b"ftyp":
+                found_ftyp = True
+            if box_type == b"moov":
+                if size - header_size > 256 * 1024 * 1024:
+                    raise ValueError("MP4-moov-Box ist unerwartet gross")
+                stream.seek(offset + header_size)
+                return found_ftyp, stream.read(size - header_size)
+            offset += size
+    return found_ftyp, None
+
+
+class _BitReader:
+    def __init__(self, data):
+        self.data = data
+        self.bit = 0
+
+    def read_bits(self, count):
+        if count < 0 or self.bit + count > len(self.data) * 8:
+            raise ValueError("H.264-SPS ist unvollstaendig")
+        value = 0
+        for _ in range(count):
+            value = (value << 1) | ((self.data[self.bit // 8] >> (7 - self.bit % 8)) & 1)
+            self.bit += 1
+        return value
+
+    def read_ue(self):
+        zeros = 0
+        while self.read_bits(1) == 0:
+            zeros += 1
+            if zeros > 31:
+                raise ValueError("Ungueltiger Exp-Golomb-Wert in H.264-SPS")
+        return (1 << zeros) - 1 + (self.read_bits(zeros) if zeros else 0)
+
+    def read_se(self):
+        value = self.read_ue()
+        return (value + 1) // 2 if value & 1 else -(value // 2)
+
+
+def _skip_h264_scaling_list(reader, size):
+    last_scale = 8
+    next_scale = 8
+    for _ in range(size):
+        if next_scale:
+            next_scale = (last_scale + reader.read_se() + 256) % 256
+        if next_scale:
+            last_scale = next_scale
+
+
+def _h264_sps_sar(sps):
+    if not sps:
+        return None
+    rbsp = bytearray()
+    zero_count = 0
+    for value in sps[1:]:  # NAL-Header auslassen und Emulation-Prevention entfernen.
+        if zero_count >= 2 and value == 3:
+            zero_count = 0
+            continue
+        rbsp.append(value)
+        zero_count = zero_count + 1 if value == 0 else 0
+
+    reader = _BitReader(bytes(rbsp))
+    profile_idc = reader.read_bits(8)
+    reader.read_bits(8)  # constraint flags + reserved_zero_2bits
+    reader.read_bits(8)  # level_idc
+    reader.read_ue()     # seq_parameter_set_id
+
+    if profile_idc in {44, 83, 86, 100, 110, 118, 122, 128, 134, 135, 138, 139, 144, 244}:
+        chroma_format_idc = reader.read_ue()
+        if chroma_format_idc == 3:
+            reader.read_bits(1)
+        reader.read_ue()
+        reader.read_ue()
+        reader.read_bits(1)
+        if reader.read_bits(1):
+            scaling_count = 8 if chroma_format_idc != 3 else 12
+            for index in range(scaling_count):
+                if reader.read_bits(1):
+                    _skip_h264_scaling_list(reader, 16 if index < 6 else 64)
+
+    reader.read_ue()  # log2_max_frame_num_minus4
+    pic_order_cnt_type = reader.read_ue()
+    if pic_order_cnt_type == 0:
+        reader.read_ue()
+    elif pic_order_cnt_type == 1:
+        reader.read_bits(1)
+        reader.read_se()
+        reader.read_se()
+        for _ in range(reader.read_ue()):
+            reader.read_se()
+    reader.read_ue()  # max_num_ref_frames
+    reader.read_bits(1)
+    reader.read_ue()  # pic_width_in_mbs_minus1
+    reader.read_ue()  # pic_height_in_map_units_minus1
+    frame_mbs_only = reader.read_bits(1)
+    if not frame_mbs_only:
+        reader.read_bits(1)
+    reader.read_bits(1)
+    if reader.read_bits(1):
+        reader.read_ue()
+        reader.read_ue()
+        reader.read_ue()
+        reader.read_ue()
+    if not reader.read_bits(1) or not reader.read_bits(1):
+        return None
+
+    aspect_ratio_idc = reader.read_bits(8)
+    if aspect_ratio_idc == 255:
+        sar_num = reader.read_bits(16)
+        sar_den = reader.read_bits(16)
+    else:
+        known = {
+            1: (1, 1), 2: (12, 11), 3: (10, 11), 4: (16, 11),
+            5: (40, 33), 6: (24, 11), 7: (20, 11), 8: (32, 11),
+            9: (80, 33), 10: (18, 11), 11: (15, 11), 12: (64, 33),
+            13: (160, 99), 14: (4, 3), 15: (3, 2), 16: (2, 1),
+        }
+        if aspect_ratio_idc not in known:
+            return None
+        sar_num, sar_den = known[aspect_ratio_idc]
+    if sar_num <= 0 or sar_den <= 0:
+        return None
+    ratio = Fraction(sar_num, sar_den)
+    return ratio.numerator, ratio.denominator
+
+
+def _avcc_sar(avcc):
+    if len(avcc) < 7:
+        return None
+    count = avcc[5] & 0x1F
+    offset = 6
+    ratios = set()
+    for _ in range(count):
+        if offset + 2 > len(avcc):
+            raise ValueError("Unvollstaendige SPS-Laenge in avcC")
+        size = struct.unpack_from(">H", avcc, offset)[0]
+        offset += 2
+        if offset + size > len(avcc):
+            raise ValueError("Unvollstaendige SPS in avcC")
+        ratio = _h264_sps_sar(avcc[offset:offset + size])
+        offset += size
+        if ratio:
+            ratios.add(ratio)
+    return next(iter(ratios)) if len(ratios) == 1 else None
+
+
+def _parse_stsd_entries(data, stsd):
+    start, end = stsd
+    if start + 8 > end:
+        raise ValueError("Unvollstaendige stsd-Box")
+    entry_count = struct.unpack_from(">I", data, start + 4)[0]
+    offset = start + 8
+    entries = []
+    for index in range(1, entry_count + 1):
+        if offset + 8 > end:
+            raise ValueError("Unvollstaendiger stsd-Eintrag")
+        size = struct.unpack_from(">I", data, offset)[0]
+        codec = data[offset + 4:offset + 8]
+        entry_end = offset + size
+        if size < 86 or entry_end > end:
+            raise ValueError("Ungueltiger visueller stsd-Eintrag")
+        width, height = struct.unpack_from(">HH", data, offset + 32)
+        avcc = _mp4_child(data, offset + 86, entry_end, b"avcC")
+        sar = None
+        if codec in (b"avc1", b"avc3") and avcc:
+            sar = _avcc_sar(data[avcc[0]:avcc[1]])
+        entries.append({
+            "index": index,
+            "codec": codec.decode("latin-1", errors="replace"),
+            "width": width,
+            "height": height,
+            "sar": sar,
+        })
+        offset = entry_end
+    return entries
+
+
+def _parse_fullbox_table(data, box, item_size, fmt):
+    start, end = box
+    if start + 8 > end:
+        raise ValueError("Unvollstaendige MP4-Tabelle")
+    count = struct.unpack_from(">I", data, start + 4)[0]
+    offset = start + 8
+    if offset + count * item_size > end:
+        raise ValueError("Abgeschnittene MP4-Tabelle")
+    return [struct.unpack_from(fmt, data, offset + index * item_size) for index in range(count)]
+
+
+def _parse_ctts_entries(data, box):
+    if box is None:
+        return []
+    start, end = box
+    if start + 8 > end:
+        raise ValueError("Unvollstaendige ctts-Box")
+    version = data[start]
+    if version not in (0, 1):
+        raise ValueError(f"Nicht unterstuetzte ctts-Version {version}")
+    count = struct.unpack_from(">I", data, start + 4)[0]
+    offset = start + 8
+    entries = []
+    offset_format = ">i" if version == 1 else ">I"
+    for _ in range(count):
+        if offset + 8 > end:
+            raise ValueError("Abgeschnittene ctts-Box")
+        sample_count = struct.unpack_from(">I", data, offset)[0]
+        composition_offset = struct.unpack_from(offset_format, data, offset + 4)[0]
+        entries.append((sample_count, composition_offset))
+        offset += 8
+    return entries
+
+
+def _parse_mp4_timescale(data, box):
+    start, end = box
+    if start + 4 > end:
+        raise ValueError("Unvollstaendige MP4-Zeitbasis")
+    version = data[start]
+    offset = start + (20 if version == 1 else 12)
+    if offset + 4 > end:
+        raise ValueError("Unvollstaendige MP4-Zeitbasis")
+    return struct.unpack_from(">I", data, offset)[0]
+
+
+def _parse_mp4_edits(data, box):
+    if box is None:
+        return []
+    start, end = box
+    if start + 8 > end:
+        raise ValueError("Unvollstaendige elst-Box")
+    version = data[start]
+    count = struct.unpack_from(">I", data, start + 4)[0]
+    offset = start + 8
+    edits = []
+    for _ in range(count):
+        if version == 1:
+            if offset + 20 > end:
+                raise ValueError("Abgeschnittene elst-Box")
+            duration = struct.unpack_from(">Q", data, offset)[0]
+            media_time = struct.unpack_from(">q", data, offset + 8)[0]
+            rate_integer, rate_fraction = struct.unpack_from(">hh", data, offset + 16)
+            offset += 20
+        else:
+            if offset + 12 > end:
+                raise ValueError("Abgeschnittene elst-Box")
+            duration = struct.unpack_from(">I", data, offset)[0]
+            media_time = struct.unpack_from(">i", data, offset + 4)[0]
+            rate_integer, rate_fraction = struct.unpack_from(">hh", data, offset + 8)
+            offset += 12
+        if rate_integer != 1 or rate_fraction != 0:
+            raise ValueError("Nicht unterstuetzte MP4-Edit-Abspielrate")
+        edits.append((duration, media_time))
+    return edits
+
+
+def _movie_position_to_media_time(position, movie_scale, track_scale, edits):
+    movie_time = Fraction(str(position)) * movie_scale
+    if not edits:
+        return Fraction(str(position)) * track_scale
+    cursor = Fraction(0)
+    for duration, media_time in edits:
+        segment_end = cursor + duration
+        if cursor <= movie_time < segment_end:
+            if media_time < 0:
+                return None
+            return Fraction(media_time) + (movie_time - cursor) * track_scale / movie_scale
+        cursor = segment_end
+    return None
+
+
+def _media_time_to_sample(media_time, stts_entries):
+    if media_time is None or media_time < 0:
+        return None
+    elapsed = Fraction(0)
+    sample_index = 0
+    for count, delta in stts_entries:
+        if count <= 0 or delta <= 0:
+            raise ValueError("Ungueltiger stts-Eintrag")
+        run_end = elapsed + count * delta
+        if media_time < run_end:
+            return sample_index + int((media_time - elapsed) // delta)
+        elapsed = run_end
+        sample_index += count
+    return None
+
+
+def _presentation_samples_for_media_times(media_times, stts_entries, ctts_entries):
+    """Map presentation times to decode-order samples, including B-frame offsets."""
+    if not ctts_entries:
+        return [_media_time_to_sample(media_time, stts_entries) for media_time in media_times]
+
+    stts_sample_count = sum(count for count, _delta in stts_entries)
+    ctts_sample_count = sum(count for count, _offset in ctts_entries)
+    if stts_sample_count != ctts_sample_count:
+        raise ValueError("stts/ctts enthalten unterschiedliche Samplezahlen")
+
+    def composition_offsets():
+        for count, composition_offset in ctts_entries:
+            if count <= 0:
+                raise ValueError("Ungueltiger ctts-Eintrag")
+            for _ in range(count):
+                yield composition_offset
+
+    targets = [media_time if media_time is not None and media_time >= 0 else None for media_time in media_times]
+    best_samples = [None] * len(targets)
+    best_times = [None] * len(targets)
+    offsets = composition_offsets()
+    decode_time = 0
+    sample_index = 0
+    for count, delta in stts_entries:
+        if count <= 0 or delta <= 0:
+            raise ValueError("Ungueltiger stts-Eintrag")
+        for _ in range(count):
+            presentation_time = decode_time + next(offsets)
+            for target_index, target in enumerate(targets):
+                if target is None or presentation_time > target:
+                    continue
+                previous = best_times[target_index]
+                if previous is None or presentation_time >= previous:
+                    best_times[target_index] = presentation_time
+                    best_samples[target_index] = sample_index
+            decode_time += delta
+            sample_index += 1
+    return best_samples
+
+
+def _sample_description_for_sample(sample_index, stsc_entries, chunk_count):
+    if sample_index is None or sample_index < 0:
+        return None
+    sample_cursor = 0
+    for index, (first_chunk, samples_per_chunk, description_index) in enumerate(stsc_entries):
+        next_first = stsc_entries[index + 1][0] if index + 1 < len(stsc_entries) else chunk_count + 1
+        run_chunks = next_first - first_chunk
+        if first_chunk < 1 or samples_per_chunk < 1 or description_index < 1 or run_chunks < 1:
+            raise ValueError("Ungueltiger stsc-Eintrag")
+        run_samples = run_chunks * samples_per_chunk
+        if sample_index < sample_cursor + run_samples:
+            return description_index
+        sample_cursor += run_samples
+    return None
+
+
+def probe_mp4_active_sps_samples(video, positions):
+    try:
+        found_ftyp, moov = _read_mp4_moov(video)
+    except (OSError, ValueError) as exc:
+        return Mp4AspectMap(is_mp4=video.suffix.lower() == ".mp4", error=str(exc))
+    if not found_ftyp:
+        return Mp4AspectMap()
+    if moov is None:
+        return Mp4AspectMap(is_mp4=True, error="MP4 enthaelt keine lesbare moov-Box")
+
+    try:
+        mvhd = _mp4_child(moov, 0, len(moov), b"mvhd")
+        if mvhd is None:
+            raise ValueError("MP4 enthaelt keine mvhd-Box")
+        movie_scale = _parse_mp4_timescale(moov, mvhd)
+        video_trak = None
+        for box_type, _box_start, payload_start, box_end in _mp4_boxes(moov):
+            if box_type != b"trak":
+                continue
+            mdia = _mp4_child(moov, payload_start, box_end, b"mdia")
+            if mdia is None:
+                continue
+            hdlr = _mp4_child(moov, mdia[0], mdia[1], b"hdlr")
+            if hdlr and hdlr[0] + 12 <= hdlr[1] and moov[hdlr[0] + 8:hdlr[0] + 12] == b"vide":
+                video_trak = (payload_start, box_end, mdia)
+                break
+        if video_trak is None:
+            raise ValueError("MP4 enthaelt keinen Videotrack")
+
+        trak_start, trak_end, mdia = video_trak
+        mdhd = _mp4_child(moov, mdia[0], mdia[1], b"mdhd")
+        minf = _mp4_child(moov, mdia[0], mdia[1], b"minf")
+        stbl = _mp4_child(moov, minf[0], minf[1], b"stbl") if minf else None
+        if mdhd is None or stbl is None:
+            raise ValueError("Videotrack enthaelt keine vollstaendige Zeit-/Sampletabelle")
+        track_scale = _parse_mp4_timescale(moov, mdhd)
+
+        stsd = _mp4_child(moov, stbl[0], stbl[1], b"stsd")
+        stsc = _mp4_child(moov, stbl[0], stbl[1], b"stsc")
+        stts = _mp4_child(moov, stbl[0], stbl[1], b"stts")
+        ctts = _mp4_child(moov, stbl[0], stbl[1], b"ctts")
+        stco = _mp4_child(moov, stbl[0], stbl[1], b"stco")
+        co64 = _mp4_child(moov, stbl[0], stbl[1], b"co64")
+        if None in (stsd, stsc, stts) or (stco is None and co64 is None):
+            raise ValueError("Videotrack enthaelt keine vollstaendige stsd/stsc/stts/stco-Tabelle")
+
+        descriptions = _parse_stsd_entries(moov, stsd)
+        stsc_entries = _parse_fullbox_table(moov, stsc, 12, ">III")
+        stts_entries = _parse_fullbox_table(moov, stts, 8, ">II")
+        ctts_entries = _parse_ctts_entries(moov, ctts)
+        chunk_box = stco if stco is not None else co64
+        chunk_start, chunk_end = chunk_box
+        if chunk_start + 8 > chunk_end:
+            raise ValueError("Unvollstaendige Chunk-Tabelle")
+        chunk_count = struct.unpack_from(">I", moov, chunk_start + 4)[0]
+
+        edts = _mp4_child(moov, trak_start, trak_end, b"edts")
+        elst = _mp4_child(moov, edts[0], edts[1], b"elst") if edts else None
+        edits = _parse_mp4_edits(moov, elst)
+
+        media_times = [
+            _movie_position_to_media_time(position, movie_scale, track_scale, edits)
+            for position in positions
+        ]
+        sample_indices = _presentation_samples_for_media_times(media_times, stts_entries, ctts_entries)
+
+        samples = []
+        for position, sample_index in zip(positions, sample_indices):
+            description_index = _sample_description_for_sample(sample_index, stsc_entries, chunk_count)
+            if description_index is None or description_index > len(descriptions):
+                raise ValueError(f"Keine eindeutige STSD-Zuordnung bei {position:.3f}s")
+            description = descriptions[description_index - 1]
+            sar = description["sar"]
+            width, height = description["width"], description["height"]
+            if sar is None or width <= 0 or height <= 0:
+                raise ValueError(
+                    f"STSD {description_index} hat keine eindeutige H.264-SPS/VUI-SAR"
+                )
+            sar_num, sar_den = sar
+            dar = Fraction(width * sar_num, height * sar_den)
+            samples.append({
+                "position": position,
+                "width": width,
+                "height": height,
+                "sar": f"{sar_num}:{sar_den}",
+                "dar": f"{dar.numerator}:{dar.denominator}",
+                "stsd": description_index,
+            })
+        return Mp4AspectMap(
+            is_mp4=True,
+            stsd_count=len(descriptions),
+            samples=tuple(samples),
+        )
+    except (IndexError, KeyError, TypeError, ValueError, struct.error, ZeroDivisionError) as exc:
+        stsd_count = len(descriptions) if "descriptions" in locals() else 0
+        return Mp4AspectMap(is_mp4=True, stsd_count=stsd_count, error=str(exc))
+
+
+def probe_showinfo_sample(video, position, ffmpeg):
+    position_text = format(position, ".3f")
+    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    try:
+        completed = subprocess.run(
+            [
+                str(ffmpeg),
+                "-hide_banner",
+                "-nostdin",
+                "-loglevel", "info",
+                "-ss", position_text,
+                "-i", str(video),
+                "-t", str(int(ASPECT_SAMPLE_SECONDS)),
+                "-map", "0:v:0",
+                "-an", "-sn", "-dn",
+                "-vf", "showinfo=checksum=0",
+                "-f", "null",
+                "NUL" if os.name == "nt" else "/dev/null",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=90,
+            check=False,
+            creationflags=creationflags,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    observations = []
+    for line in completed.stdout.splitlines():
+        if "showinfo" not in line or " n:" not in line:
+            continue
+        sar = SHOWINFO_SAR_RE.search(line)
+        size = SHOWINFO_SIZE_RE.search(line)
+        if not sar or not size:
+            continue
+        sar_num, sar_den = int(sar.group(1)), int(sar.group(2))
+        width, height = int(size.group(1)), int(size.group(2))
+        if sar_den <= 0 or width <= 0 or height <= 0:
+            continue
+        normalized = Fraction(sar_num, sar_den)
+        observations.append((width, height, normalized.numerator, normalized.denominator))
+
+    if not observations:
+        return None
+
+    width, height, sar_num, sar_den = Counter(observations).most_common(1)[0][0]
+    dar = Fraction(width * sar_num, height * sar_den)
+    return {
+        "position": position,
+        "width": width,
+        "height": height,
+        "sar": f"{sar_num}:{sar_den}",
+        "dar": f"{dar.numerator}:{dar.denominator}",
+    }
+
+
+def decide_aspect_ratio(
+    video,
+    keeps,
+    rate100,
+    sample_probe=probe_showinfo_sample,
+    mp4_probe=probe_mp4_active_sps_samples,
+):
+    ffprobe = find_media_executable("ffprobe.exe")
+    if ffprobe is None:
+        return AspectDecision(
+            description="Videoauflösung und PAL-Ratio konnten nicht geprüft werden.",
+            warning="ffprobe wurde nicht gefunden; Aspect Ratio wird nicht erzwungen.",
+        )
+
+    geometry = probe_video_geometry(video, ffprobe)
+    if geometry is None:
+        return AspectDecision(
+            description="Videoauflösung und PAL-Ratio konnten nicht geprüft werden.",
+            warning="Videoauflösung konnte nicht bestimmt werden; Aspect Ratio wird nicht erzwungen.",
+        )
+
+    width, height = geometry
+    if width not in PAL_SD_WIDTHS or height != PAL_SD_HEIGHT:
+        return AspectDecision(
+            description=f"{width}x{height} ist kein PAL-SD-Risikofall; bisherige Containerkonfiguration bleibt aktiv."
+        )
+
+    positions = get_keep_sample_positions(keeps, rate100)
+    samples = []
+    multi_stsd = False
+    mp4_map = Mp4AspectMap()
+    if video.is_file() and video.suffix.lower() == ".mp4":
+        mp4_map = mp4_probe(video, positions)
+        if mp4_map.error and mp4_map.stsd_count != 1:
+            return AspectDecision(
+                description=f"PAL-SD {width}x{height}: MP4-STSD/SPS-Zuordnung nicht eindeutig.",
+                warning=f"{mp4_map.error}; Aspect Ratio wird nicht erzwungen.",
+            )
+        multi_stsd = mp4_map.is_mp4 and mp4_map.stsd_count > 1
+
+    if multi_stsd:
+        samples = list(mp4_map.samples)
+        if len(samples) != len(positions):
+            return AspectDecision(
+                description=f"PAL-SD {width}x{height}: Multi-STSD-Zuordnung unvollstaendig.",
+                warning="Nicht jede Keep-Position konnte eindeutig einem STSD/SPS-Eintrag zugeordnet werden; "
+                        "Aspect Ratio wird nicht erzwungen.",
+            )
+    else:
+        ffmpeg = find_media_executable("ffmpeg.exe")
+        if ffmpeg is None:
+            return AspectDecision(
+                description=f"PAL-SD {width}x{height}: keine automatische Ratio-Entscheidung.",
+                warning="ffmpeg wurde nicht gefunden; Aspect Ratio wird nicht erzwungen.",
+            )
+        for position in positions:
+            sample = sample_probe(video, position, ffmpeg)
+            if sample is not None:
+                samples.append(sample)
+
+    sample_summary = tuple(
+        (
+            f"{sample['position']:.3f}s=STSD {sample['stsd']},"
+            f"{sample['width']}x{sample['height']},SAR {sample['sar']},DAR {sample['dar']}"
+            if "stsd" in sample else
+            f"{sample['position']:.3f}s={sample['width']}x{sample['height']},"
+            f"SAR {sample['sar']},DAR {sample['dar']}"
+        )
+        for sample in samples
+    )
+    required = max(MIN_VALID_ASPECT_SAMPLES, min(4, len(positions)))
+    if len(samples) < required:
+        return AspectDecision(
+            description=f"PAL-SD {width}x{height}: Ratio nicht ausreichend messbar.",
+            warning=(
+                f"Nur {len(samples)} von mindestens {required} erforderlichen Keep-Stichproben waren verwertbar; "
+                "Aspect Ratio wird nicht erzwungen."
+            ),
+            samples=sample_summary,
+        )
+
+    observed_sizes = {(sample["width"], sample["height"]) for sample in samples}
+    observed_dars = {sample["dar"] for sample in samples}
+    if observed_sizes != {(width, height)}:
+        return AspectDecision(
+            description=f"PAL-SD {width}x{height}: wechselnde Auflösung in den Keep-Segmenten.",
+            warning="Die Keep-Stichproben melden unterschiedliche Auflösungen; Aspect Ratio wird nicht erzwungen.",
+            samples=sample_summary,
+        )
+
+    target = None
+    if observed_dars == {"16:9"}:
+        target = Fraction(16, 9)
+    elif observed_dars == {"4:3"}:
+        target = Fraction(4, 3)
+
+    if target is None:
+        observed = ", ".join(sorted(observed_dars)) or "keine"
+        return AspectDecision(
+            description=f"PAL-SD {width}x{height}: Keep-DAR gemischt oder unbekannt ({observed}).",
+            warning="Keine eindeutige PAL-Ratio; Aspect Ratio wird nicht automatisch erzwungen.",
+            samples=sample_summary,
+        )
+
+    display_width_fraction = height * target
+    if display_width_fraction.denominator != 1:
+        return AspectDecision(
+            description=f"PAL-SD {width}x{height}: Ziel-DAR {target.numerator}:{target.denominator} nicht darstellbar.",
+            warning="Display-Breite ist nicht ganzzahlig; Aspect Ratio wird nicht erzwungen.",
+            samples=sample_summary,
+        )
+
+    expected_dar = f"{target.numerator}:{target.denominator}"
+    display_width = display_width_fraction.numerator
+    return AspectDecision(
+        force=True,
+        aspect_ratio=4,
+        display_width=display_width,
+        expected_dar=expected_dar,
+        description=(
+            f"PAL-SD {width}x{height}: Keep-Material stabil {expected_dar}"
+            f" ({'aktive STSD/SPS-Zuordnung' if multi_stsd else 'V6-showinfo'}); "
+            f"Avidemux Custom-DAR mit Display-Breite {display_width}."
+        ),
+        samples=sample_summary,
+    )
 
 
 def format_elapsed(seconds):
@@ -697,26 +1531,23 @@ def run_comskip_compact(comskip, video, downloads, idx, total):
     )
 
 
-def avidemux_project_text(video, txt):
+def prepare_avidemux_project(video, txt):
     total_frames, rate100, ads = parse_comskip_txt(txt)
     frame_us = int(round(100_000_000 / rate100))
 
-    keeps, cursor = [], 0
-    for a, b in ads:
-        commercial_start = max(0, a - 1)
-        commercial_end = b
-        if commercial_start > cursor:
-            keeps.append((cursor, commercial_start))
-        cursor = max(cursor, commercial_end)
-    if cursor < total_frames:
-        keeps.append((cursor, total_frames))
+    keeps = build_keep_segments(total_frames, ads)
     if not keeps:
         raise ValueError("Kein Filmsegment übrig.")
+
+    aspect = decide_aspect_ratio(video, keeps, rate100)
 
     vp = video.resolve().as_posix().replace('"', '\\"')
     out = [
         "#PY  <- Needed to identify #",
         "#--automatically built: Comskip -> Avidemux 2.8.1--",
+        f"# ComskipExpectedDAR={aspect.expected_dar}",
+        f"# ComskipAspectDecision={aspect.description}",
+        *[f"# ComskipAspectSample={sample}" for sample in aspect.samples],
         "adm = Avidemux()",
         "ed = Editor()",
         f'if not adm.loadVideo("{vp}"):',
@@ -780,9 +1611,18 @@ def avidemux_project_text(video, txt):
         "adm.audioSetChannelDelays(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)",
         "adm.audioSetChannelRemap(0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8)",
         "adm.audioSetShift(0, 0, 0)",
-        'adm.setContainer("MP4", "muxerType=0", "optimize=1", "forceAspectRatio=False", "aspectRatio=1", "displayWidth=1280", "rotation=0", "clockfreq=0")',
+        (
+            'adm.setContainer("MP4", "muxerType=0", "optimize=1", '
+            f'"forceAspectRatio={aspect.force}", "aspectRatio={aspect.aspect_ratio}", '
+            f'"displayWidth={aspect.display_width}", "rotation=0", "clockfreq=0")'
+        ),
     ]
-    return "\n".join(out) + "\n"
+    return "\n".join(out) + "\n", aspect
+
+
+def avidemux_project_text(video, txt):
+    project_text, _aspect = prepare_avidemux_project(video, txt)
+    return project_text
 
 
 def avidemux_start_bat(target, load_video=False):
@@ -822,7 +1662,7 @@ def write_crop_artifacts(video, txt):
     project = video.with_name(video.stem + CROP_SUFFIX)
     launcher = video.with_name(video.stem + CROP_START_SUFFIX)
 
-    project_text = avidemux_project_text(video, txt)
+    project_text, aspect = prepare_avidemux_project(video, txt)
     launcher_text = avidemux_start_bat(project)
 
     project.write_text(project_text, encoding="utf-8")
@@ -832,6 +1672,10 @@ def write_crop_artifacts(video, txt):
         video,
         (MANUAL_SUFFIX, MANUAL_START_SUFFIX, APPROVED_SUFFIX, START_SUFFIX),
     )
+
+    print("Aspect Ratio:", aspect.description)
+    if aspect.warning:
+        print("WARNUNG:", aspect.warning)
 
     return project, launcher
 
